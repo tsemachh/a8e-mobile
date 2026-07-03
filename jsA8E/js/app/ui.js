@@ -165,6 +165,23 @@
     function resizeDisplayCanvas() {
       const viewport = screenViewport || canvas.parentElement;
       if (!viewport) return;
+
+      // Mobile game mode: fill the entire visible screen (width AND height),
+      // stretching the picture like an old TV set to "fill".
+      if (document.body.classList.contains("mobileGame")) {
+        const vv = window.visualViewport;
+        const fullW = Math.max(1, Math.floor(vv ? vv.width : window.innerWidth));
+        const fullH = Math.max(
+          1,
+          Math.floor(vv ? vv.height : window.innerHeight),
+        );
+        const mw = fullW + "px";
+        const mh = fullH + "px";
+        if (canvas.style.width !== mw) canvas.style.width = mw;
+        if (canvas.style.height !== mh) canvas.style.height = mh;
+        return;
+      }
+
       const rect = viewport.getBoundingClientRect();
       const maxW = Math.max(1, Math.floor(rect.width || nativeScreenW));
       const aspect = nativeScreenW / nativeScreenH;
