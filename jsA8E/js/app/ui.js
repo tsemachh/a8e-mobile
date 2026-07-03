@@ -249,7 +249,7 @@
       }
       const touch =
         (navigator.maxTouchPoints || 0) > 0 || "ontouchstart" in window;
-      if (touch && isMobile()) return Math.min(dpr, 1.25);
+      if (touch && isMobile()) return Math.min(dpr, 1);
       return dpr;
     }
 
@@ -2222,6 +2222,49 @@
         updateStatus: updateStatus,
       });
     }
+
+    // Optional FPS overlay for performance diagnosis: add ?a8e_fps=1 to URL.
+    (function setupFpsOverlay() {
+      let enabled = false;
+      try {
+        const params = new window.URLSearchParams(window.location.search);
+        enabled = params.get("a8e_fps") === "1";
+      } catch {
+        return;
+      }
+      if (!enabled || !app) return;
+      const el = document.createElement("div");
+      el.className = "fpsOverlay";
+      el.textContent = "fps: --";
+      document.body.appendChild(el);
+      let localFrames = 0;
+      let localStart = Date.now();
+      if (!useWorkerApp && typeof app.onDebugStateChange === "function") {
+        app.onDebugStateChange(function (st) {
+          if (st && st.reason === "frame") localFrames++;
+        });
+      }
+      window.setInterval(function () {
+        let text = null;
+        if (typeof app.getPerfStats === "function") {
+          const perf = app.getPerfStats();
+          if (perf && perf.ageMs < 3000) {
+            text = perf.fps + " fps / " + perf.rendererBackend + " / worker";
+          }
+        }
+        if (text === null && !useWorkerApp) {
+          const now = Date.now();
+          const winMs = now - localStart;
+          if (winMs > 0) {
+            text =
+              Math.round((localFrames * 1000) / winMs) + " fps / main-thread";
+          }
+          localFrames = 0;
+          localStart = now;
+        }
+        el.textContent = text === null ? "fps: --" : text;
+      }, 1000);
+    })();
 
     // In mobile game mode, go truly fullscreen (no browser bar) and try to
     // lock landscape. Must be called synchronously from a user gesture.

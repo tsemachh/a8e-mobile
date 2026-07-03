@@ -1086,6 +1086,13 @@
         return;
       }
 
+      if (data.type === "perf") {
+        state.perfFps = data.fps | 0;
+        state.perfRendererBackend = data.rendererBackend || "unknown";
+        state.perfTs = Date.now();
+        return;
+      }
+
       if (data.type === "hostfsSnapshot") {
         hostFsProxy.snapshotFromWire(data.files || []);
         return;
@@ -1225,6 +1232,14 @@
       },
       getDebugState: function () {
         return state.debugState ? Object.assign({}, state.debugState) : null;
+      },
+      getPerfStats: function () {
+        if (!state.perfTs) return null;
+        return {
+          fps: state.perfFps | 0,
+          rendererBackend: state.perfRendererBackend || "unknown",
+          ageMs: Date.now() - state.perfTs,
+        };
       },
       getDebugStateAsync: function () {
         return sendRequest("getDebugState").then(function (result) {

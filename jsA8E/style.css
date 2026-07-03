@@ -2928,3 +2928,21 @@ body:not(.mobileGame) .mobileControls {
   color: var(--muted);
   font-size: var(--fs-sm);
 }
+
+/* ===== FPS diagnosis overlay (?a8e_fps=1) ===== */
+
+.fpsOverlay {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 990;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(5, 9, 16, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #4ade80;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  pointer-events: none;
+}

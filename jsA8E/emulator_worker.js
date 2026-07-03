@@ -7,17 +7,23 @@
 
   if (typeof self.requestAnimationFrame !== "function") {
     let rafSeq = 1;
+    let lastRafFire = 0;
     const rafTimers = Object.create(null);
     self.requestAnimationFrame = function (cb) {
       const id = rafSeq++;
+      // Pace ticks ~16ms apart measured fire-to-fire, so callback work time
+      // is not added on top (a fixed 16ms delay after 20ms of frame work
+      // would tick at ~28fps and snowball latency on slow devices).
+      const delay = Math.max(0, Math.min(16, 16 - (Date.now() - lastRafFire)));
       rafTimers[id] = setTimeout(function () {
         delete rafTimers[id];
+        lastRafFire = Date.now();
         try {
-          cb(Date.now());
+          cb(lastRafFire);
         } catch {
           // ignore
         }
-      }, 16);
+      }, delay);
       return id;
     };
     self.cancelAnimationFrame = function (id) {
@@ -32,6 +38,33 @@
   let screenCanvas = null;
   let rendererBackend = "unknown";
   let initDone = false;
+  let perfFrameCount = 0;
+  let perfWindowStart = 0;
+
+  // Called once per presented frame; posts a fps sample about once a second.
+  function handleDebugStateFromCore(state) {
+    const isFrame = !!state && state.reason === "frame";
+    if (isFrame) {
+      const now = Date.now();
+      if (!perfWindowStart) perfWindowStart = now;
+      perfFrameCount++;
+      const elapsed = now - perfWindowStart;
+      if (elapsed >= 1000) {
+        try {
+          self.postMessage({
+            type: "perf",
+            fps: Math.round((perfFrameCount * 1000) / elapsed),
+            rendererBackend: rendererBackend,
+          });
+        } catch {
+          // ignore
+        }
+        perfFrameCount = 0;
+        perfWindowStart = now;
+      }
+    }
+    queueDebugState(state, !isFrame);
+  }
   let hostFsUnsubscribe = null;
   const pendingCommands = [];
   const DEBUG_STATE_MIN_INTERVAL_MS = 80;
@@ -503,10 +536,7 @@
         turbo: !!msg.turbo,
         sioTurbo: msg.sioTurbo !== false,
         optionOnStart: !!msg.optionOnStart,
-        onDebugState: function (state) {
-          const force = !state || state.reason !== "frame";
-          queueDebugState(state, force);
-        },
+        onDebugState: handleDebugStateFromCore,
         keyboardMappingMode:
           msg.keyboardMappingMode === "original" ? "original" : "translated",
       });
@@ -523,10 +553,7 @@
         turbo: !!msg.turbo,
         sioTurbo: msg.sioTurbo !== false,
         optionOnStart: !!msg.optionOnStart,
-        onDebugState: function (state) {
-          const force = !state || state.reason !== "frame";
-          queueDebugState(state, force);
-        },
+        onDebugState: handleDebugStateFromCore,
         keyboardMappingMode:
           msg.keyboardMappingMode === "original" ? "original" : "translated",
       });
