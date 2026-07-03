@@ -1150,6 +1150,7 @@
         turbo: !!opts.turbo,
         sioTurbo: opts.sioTurbo !== false,
         optionOnStart: !!opts.optionOnStart,
+        catchupFrameCap: opts.catchupFrameCap | 0,
         keyboardMappingMode: keyboardMappingMode,
       },
       [offscreen, audioChannel.port2],

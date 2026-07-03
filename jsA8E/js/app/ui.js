@@ -403,6 +403,15 @@
         : "original";
     }
 
+    function getCatchupFrameCap() {
+      // Shorter catch-up bursts on touch/mobile: after a hiccup, prefer a
+      // brief slow-motion over long ticks that starve painting and input
+      // (a 4-frame burst presents at ~12 fps while it lasts).
+      const touch =
+        (navigator.maxTouchPoints || 0) > 0 || "ontouchstart" in window;
+      return touch && isMobile() ? 2 : 0; // 0 = core default (4)
+    }
+
     const romOs = document.getElementById("romOs");
     const romBasic = document.getElementById("romBasic");
     const disk1 = document.getElementById("disk1");
@@ -635,6 +644,7 @@
         turbo: btnTurbo.classList.contains("active"),
         sioTurbo: btnSioTurbo.classList.contains("active"),
         optionOnStart: btnOptionOnStart.classList.contains("active"),
+        catchupFrameCap: getCatchupFrameCap(),
         keyboardMappingMode: getKeyboardMappingModeFromUi(),
       }, workerPreference));
       resizeCrtCanvas();

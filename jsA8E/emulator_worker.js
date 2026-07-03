@@ -536,6 +536,7 @@
         turbo: !!msg.turbo,
         sioTurbo: msg.sioTurbo !== false,
         optionOnStart: !!msg.optionOnStart,
+        catchupFrameCap: msg.catchupFrameCap | 0,
         onDebugState: handleDebugStateFromCore,
         keyboardMappingMode:
           msg.keyboardMappingMode === "original" ? "original" : "translated",
@@ -553,6 +554,7 @@
         turbo: !!msg.turbo,
         sioTurbo: msg.sioTurbo !== false,
         optionOnStart: !!msg.optionOnStart,
+        catchupFrameCap: msg.catchupFrameCap | 0,
         onDebugState: handleDebugStateFromCore,
         keyboardMappingMode:
           msg.keyboardMappingMode === "original" ? "original" : "translated",

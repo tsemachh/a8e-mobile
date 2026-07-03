@@ -559,6 +559,11 @@
     let turbo = !!opts.turbo;
     let sioTurbo = opts.sioTurbo !== false;
     const skipRendering = !!opts.skipRendering;
+    // How many frames worth of cycles a single tick may catch up after a
+    // hiccup. Lower values trade brief slow-motion for shorter ticks and
+    // better input/present latency on CPU-constrained (mobile) devices.
+    const catchupFrameCap =
+      (opts.catchupFrameCap | 0) > 0 ? Math.max(1, opts.catchupFrameCap | 0) : 4;
     let optionOnStart = !!opts.optionOnStart;
     let keyboardMappingMode =
       opts.keyboardMappingMode === "original" ? "original" : "translated";
@@ -1046,7 +1051,10 @@
       // Cap catch-up work to avoid spiral-of-death after long pauses.
       // Scale the cap with emulation multiplier so turbo can still reach target
       // speed on lower display refresh rates (e.g. 30 Hz).
-      const maxCatchupFrames = Math.max(4, Math.ceil(mult * 4));
+      const maxCatchupFrames = Math.max(
+        catchupFrameCap,
+        Math.ceil(mult * catchupFrameCap),
+      );
       if (machine.cycleAccum > frameBudget * maxCatchupFrames)
         {machine.cycleAccum = frameBudget * maxCatchupFrames;}
 

@@ -508,6 +508,9 @@
         </div>
         <div id="romPickerList" class="romPickerList"></div>
         <div id="romPickerStatus" class="romPickerStatus"></div>
+        <button type="button" id="btnInstallApp" class="romPickerInstallBtn" hidden>
+          <i class="fa-solid fa-download"></i> Install as app
+        </button>
       </div>
     </div>
 
@@ -572,6 +575,45 @@
           });
         });
       }
+
+      // PWA install button (shown in the game picker when installable).
+      (function () {
+        var deferredPrompt = null;
+        var btn = document.getElementById("btnInstallApp");
+        if (!btn) return;
+        var standalone =
+          (window.matchMedia &&
+            window.matchMedia("(display-mode: standalone)").matches) ||
+          (window.matchMedia &&
+            window.matchMedia("(display-mode: fullscreen)").matches) ||
+          window.navigator.standalone === true;
+        window.addEventListener("beforeinstallprompt", function (e) {
+          e.preventDefault();
+          deferredPrompt = e;
+          if (!standalone) btn.hidden = false;
+        });
+        // iOS Safari never fires beforeinstallprompt; offer manual steps.
+        var isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+        if (isIos && !standalone) btn.hidden = false;
+        btn.addEventListener("click", function () {
+          if (deferredPrompt) {
+            deferredPrompt.prompt();
+            deferredPrompt.userChoice.then(function () {
+              btn.hidden = true;
+              deferredPrompt = null;
+            });
+            return;
+          }
+          window.alert(
+            isIos
+              ? "Install on iPhone/iPad: tap the Share button in Safari, then 'Add to Home Screen'."
+              : "Install: open the browser menu and choose 'Install app' or 'Add to Home Screen'.",
+          );
+        });
+        window.addEventListener("appinstalled", function () {
+          btn.hidden = true;
+        });
+      })();
     </script>
   </body>
 </html>
