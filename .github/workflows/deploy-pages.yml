@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Stamp service worker cache version with commit SHA
+        run: sed -i "s/a8e-v1/a8e-${GITHUB_SHA::8}/" jsA8E/sw.js
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact (repo root, so jsA8E/ can fetch ../ATARIXL.ROM and ../roms/)

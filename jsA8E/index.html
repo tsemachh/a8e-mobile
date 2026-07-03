@@ -4,6 +4,13 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
     <title>jsA8E</title>
+    <meta name="theme-color" content="#0d1117" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="A8E" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="icons/icon-192.png" />
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.1/css/all.min.css" />
     <link rel="stylesheet" href="style.css" />
@@ -472,6 +479,21 @@
       </section>
     </main>
 
+    <div id="mobileControls" class="mobileControls" hidden>
+      <button type="button" id="mcConfigBtn" class="mcFloatBtn mcConfigBtn" aria-label="Toggle toolbar"><i class="fa-solid fa-gear"></i></button>
+      <button type="button" id="mcMenuBtn" class="mcFloatBtn mcMenuBtn" aria-label="Toggle console keys"><i class="fa-solid fa-bars"></i></button>
+      <div id="mcConsole" class="mcConsole" hidden>
+        <button type="button" class="mcConsoleBtn" id="mcOption">OPTION</button>
+        <button type="button" class="mcConsoleBtn" id="mcSelect">SELECT</button>
+        <button type="button" class="mcConsoleBtn" id="mcStart">START</button>
+        <button type="button" class="mcConsoleBtn mcGames" id="mcGames">GAMES</button>
+      </div>
+      <div id="mcDpad" class="mcDpad" aria-label="Joystick pad">
+        <div class="mcDpadNub" id="mcDpadNub"></div>
+      </div>
+      <button type="button" id="mcFire" class="mcFire" aria-label="Fire">FIRE</button>
+    </div>
+
     <div id="romPicker" class="romPicker" hidden role="dialog" aria-modal="true" aria-label="Game list">
       <div class="romPickerPanel">
         <div class="romPickerHeader">
@@ -536,5 +558,14 @@
     <script src="js/app/snapshot_ui.js"></script>
     <script src="js/app/version.js"></script>
     <script src="js/app/a8e.js"></script>
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", function () {
+          navigator.serviceWorker.register("sw.js").catch(function (err) {
+            console.warn("Service worker registration failed:", err);
+          });
+        });
+      }
+    </script>
   </body>
 </html>

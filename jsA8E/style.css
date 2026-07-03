@@ -2705,3 +2705,174 @@ canvas.crtEnabled {
     max-width: 150px;
   }
 }
+
+/* ===== Mobile game mode ===== */
+
+body.mobileGame .topbar {
+  display: none;
+}
+
+body.mobileGame.mcShowBar .topbar {
+  display: flex;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 900;
+  max-height: 75vh;
+  overflow-y: auto;
+  background: rgba(13, 17, 23, 0.96);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+}
+
+body.mobileGame .layout {
+  padding: 0;
+  gap: 0;
+  overflow-y: hidden;
+}
+
+body.mobileGame .screenPanel {
+  padding: 0;
+}
+
+body.mobileGame .screenViewport {
+  align-items: flex-start;
+  padding-top: env(safe-area-inset-top, 0);
+}
+
+.mobileControls {
+  position: fixed;
+  inset: 0;
+  z-index: 800;
+  pointer-events: none;
+}
+
+.mobileControls[hidden] {
+  display: none;
+}
+
+.mcFloatBtn {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(22, 29, 43, 0.45);
+  color: rgba(230, 238, 252, 0.85);
+  font-size: 17px;
+  font-family: "Exo 2", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 800;
+  pointer-events: auto;
+  touch-action: manipulation;
+  backdrop-filter: blur(2px);
+}
+
+.mcConfigBtn {
+  right: calc(env(safe-area-inset-right, 0px) + 10px);
+}
+
+.mcMenuBtn {
+  left: calc(env(safe-area-inset-left, 0px) + 10px);
+}
+
+.mcMenuBtn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.mcConsole {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 62px);
+  left: calc(env(safe-area-inset-left, 0px) + 10px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: auto;
+}
+
+.mcConsole[hidden] {
+  display: none;
+}
+
+.mcConsoleBtn {
+  min-width: 92px;
+  min-height: 44px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(22, 29, 43, 0.5);
+  color: rgba(230, 238, 252, 0.9);
+  font-family: "Exo 2", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  backdrop-filter: blur(2px);
+}
+
+.mcConsoleBtn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(16, 38, 61, 0.7);
+}
+
+.mcConsoleBtn.mcGames {
+  border-color: rgba(92, 200, 255, 0.5);
+}
+
+.mcDpad {
+  position: fixed;
+  left: calc(env(safe-area-inset-left, 0px) + 18px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+  width: 148px;
+  height: 148px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.28);
+  background: radial-gradient(circle at 50% 45%, rgba(60, 75, 105, 0.4), rgba(22, 29, 43, 0.45));
+  pointer-events: auto;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mcDpadNub {
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  background: rgba(157, 176, 211, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  will-change: transform;
+}
+
+.mcFire {
+  position: fixed;
+  right: calc(env(safe-area-inset-right, 0px) + 22px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 40px);
+  width: 108px;
+  height: 108px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 120, 100, 0.45);
+  background: radial-gradient(circle at 50% 40%, rgba(200, 64, 48, 0.5), rgba(120, 30, 20, 0.45));
+  color: rgba(255, 230, 225, 0.9);
+  font-family: "Exo 2", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 800;
+  font-size: 16px;
+  letter-spacing: 0.1em;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.mcFire:active {
+  background: radial-gradient(circle at 50% 40%, rgba(240, 90, 70, 0.7), rgba(150, 40, 28, 0.6));
+}
+
+/* Only show overlay controls in mobile game mode */
+body:not(.mobileGame) .mobileControls {
+  display: none;
+}

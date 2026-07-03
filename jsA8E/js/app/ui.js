@@ -218,10 +218,28 @@
       if (canvas.style.height !== nextH) canvas.style.height = nextH;
     }
 
+    function getRenderDpr() {
+      const dpr = window.devicePixelRatio || 1;
+      // Mobile GPUs pay dearly for the CRT post-process at native DPR
+      // (width * 3 backing pixels, ~18 texture taps per pixel). Cap the
+      // render resolution on touch devices; override with ?a8e_dpr=<n>.
+      try {
+        const params = new window.URLSearchParams(window.location.search);
+        const forced = parseFloat(params.get("a8e_dpr") || "");
+        if (isFinite(forced) && forced > 0) return Math.min(dpr, forced);
+      } catch {
+        // ignore malformed URLs
+      }
+      const touch =
+        (navigator.maxTouchPoints || 0) > 0 || "ontouchstart" in window;
+      if (touch && isMobile()) return Math.min(dpr, 1.25);
+      return dpr;
+    }
+
     function resizeCrtCanvas() {
       resizeDisplayCanvas();
       if (!gl && !useWorkerApp) return;
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = getRenderDpr();
       const rect = canvas.getBoundingClientRect();
       const cssW = Math.max(1, Math.round(rect.width || nativeScreenW));
       const cssH = Math.max(1, Math.round(rect.height || nativeScreenH));
@@ -1280,8 +1298,7 @@
       });
     }
 
-    CONSOLE_KEY_DEFS.forEach(function (def) {
-      const btn = document.getElementById(def.id);
+    function bindConsoleKeyButton(def, btn) {
       if (!btn) return;
       consoleKeyButtons.push({ def: def, btn: btn });
       btn.addEventListener("pointerdown", function (e) {
@@ -1302,7 +1319,105 @@
       btn.addEventListener("contextmenu", function (e) {
         e.preventDefault();
       });
+    }
+
+    CONSOLE_KEY_DEFS.forEach(function (def) {
+      bindConsoleKeyButton(def, document.getElementById(def.id));
     });
+
+    // Mobile overlay console keys share the same defs/behavior.
+    bindConsoleKeyButton(CONSOLE_KEY_DEFS[0], document.getElementById("mcOption"));
+    bindConsoleKeyButton(CONSOLE_KEY_DEFS[1], document.getElementById("mcSelect"));
+    bindConsoleKeyButton(CONSOLE_KEY_DEFS[2], document.getElementById("mcStart"));
+
+    // Semi-transparent overlay D-pad + fire for mobile game mode.
+    function setupMobileOverlayControls() {
+      const pad = document.getElementById("mcDpad");
+      const nub = document.getElementById("mcDpadNub");
+      const fire = document.getElementById("mcFire");
+      if (!pad || !fire) return;
+
+      let padPointerId = null;
+
+      function padCenter() {
+        const rect = pad.getBoundingClientRect();
+        return {
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+          r: Math.min(rect.width, rect.height) / 2,
+        };
+      }
+
+      function applyPad(clientX, clientY) {
+        const c = padCenter();
+        const dx = clientX - c.x;
+        const dy = clientY - c.y;
+        const dead = c.r * 0.28;
+        const maxDeflect = c.r * 0.55;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (nub) {
+          let nx = dx;
+          let ny = dy;
+          if (dist > maxDeflect) {
+            nx = (dx / dist) * maxDeflect;
+            ny = (dy / dist) * maxDeflect;
+          }
+          nub.style.transform = "translate(" + nx + "px, " + ny + "px)";
+        }
+        setJoystickDirection(dy < -dead, dy > dead, dx < -dead, dx > dead);
+      }
+
+      function resetPad() {
+        padPointerId = null;
+        if (nub) nub.style.transform = "";
+        setJoystickDirection(false, false, false, false);
+      }
+
+      pad.addEventListener("pointerdown", function (e) {
+        e.preventDefault();
+        padPointerId = e.pointerId;
+        try {
+          pad.setPointerCapture(e.pointerId);
+        } catch {
+          /* ignore */
+        }
+        applyPad(e.clientX, e.clientY);
+      });
+      pad.addEventListener("pointermove", function (e) {
+        if (e.pointerId !== padPointerId) return;
+        e.preventDefault();
+        applyPad(e.clientX, e.clientY);
+      });
+      const endPad = function (e) {
+        if (e.pointerId !== padPointerId) return;
+        e.preventDefault();
+        resetPad();
+      };
+      pad.addEventListener("pointerup", endPad);
+      pad.addEventListener("pointercancel", endPad);
+
+      fire.addEventListener("pointerdown", function (e) {
+        e.preventDefault();
+        try {
+          fire.setPointerCapture(e.pointerId);
+        } catch {
+          /* ignore */
+        }
+        setJoystickFire(true);
+      });
+      const endFire = function (e) {
+        e.preventDefault();
+        setJoystickFire(false);
+      };
+      fire.addEventListener("pointerup", endFire);
+      fire.addEventListener("pointercancel", endFire);
+
+      [pad, fire].forEach(function (el) {
+        el.addEventListener("contextmenu", function (e) {
+          e.preventDefault();
+        });
+      });
+    }
 
     function setJoystickEnabled(active) {
       if (!btnJoystick || !joystickPanel) return;
@@ -1986,9 +2101,41 @@
     setKeyboardMappingMode(getKeyboardMappingModeFromUi(), true);
     const isTouchDevice =
       (navigator.maxTouchPoints || 0) > 0 || "ontouchstart" in window;
-    if (btnJoystick && joystickPanel) {
-      // Auto-show the virtual joystick + console keys on touch devices.
-      setJoystickEnabled(btnJoystick.classList.contains("active") || isTouchDevice);
+    const mobileGameMode = isTouchDevice && isMobile();
+    const mobileControls = document.getElementById("mobileControls");
+    if (mobileGameMode) {
+      // Mobile game mode: full-width display, toolbar behind a gear button,
+      // semi-transparent overlay pad/fire and console-key drawer.
+      document.body.classList.add("mobileGame");
+      if (mobileControls) mobileControls.hidden = false;
+      setupMobileOverlayControls();
+      const mcConfigBtn = document.getElementById("mcConfigBtn");
+      if (mcConfigBtn) {
+        mcConfigBtn.addEventListener("click", function () {
+          document.body.classList.toggle("mcShowBar");
+          resizeCrtCanvas();
+        });
+      }
+      const mcMenuBtn = document.getElementById("mcMenuBtn");
+      const mcConsole = document.getElementById("mcConsole");
+      if (mcMenuBtn && mcConsole) {
+        mcMenuBtn.addEventListener("click", function () {
+          mcConsole.hidden = !mcConsole.hidden;
+          mcMenuBtn.classList.toggle("active", !mcConsole.hidden);
+        });
+      }
+      const mcGames = document.getElementById("mcGames");
+      if (mcGames) {
+        mcGames.addEventListener("click", function () {
+          if (window.A8ERomPicker) window.A8ERomPicker.show();
+        });
+      }
+      if (btnJoystick && joystickPanel) setJoystickEnabled(false);
+    } else if (btnJoystick && joystickPanel) {
+      // Desktop: keep the CX40 joystick panel toggle behavior.
+      setJoystickEnabled(
+        btnJoystick.classList.contains("active") || isTouchDevice,
+      );
     }
     if (btnKeyboard && keyboardPanel) {
       const keyboardActive = !isMobile();
