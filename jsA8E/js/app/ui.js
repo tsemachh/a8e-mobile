@@ -2148,6 +2148,37 @@
         });
       }
       if (btnJoystick && joystickPanel) setJoystickEnabled(false);
+
+      // Rotate-to-landscape hint: shown while in portrait, tap to dismiss.
+      const rotateHint = document.getElementById("rotateHint");
+      let rotateHintDismissed = false;
+      const portraitQuery =
+        window.matchMedia && window.matchMedia("(orientation: portrait)");
+
+      function updateRotateHint() {
+        if (!rotateHint) return;
+        const portrait = portraitQuery ? portraitQuery.matches : false;
+        rotateHint.hidden = rotateHintDismissed || !portrait;
+      }
+
+      if (rotateHint) {
+        rotateHint.addEventListener("click", function () {
+          rotateHintDismissed = true;
+          updateRotateHint();
+        });
+      }
+      if (portraitQuery) {
+        const onOrientationChange = function () {
+          rotateHintDismissed = false;
+          updateRotateHint();
+          resizeCrtCanvas();
+        };
+        if (typeof portraitQuery.addEventListener === "function")
+          {portraitQuery.addEventListener("change", onOrientationChange);}
+        else if (typeof portraitQuery.addListener === "function")
+          {portraitQuery.addListener(onOrientationChange);}
+      }
+      updateRotateHint();
     } else if (btnJoystick && joystickPanel) {
       // Desktop: keep the CX40 joystick panel toggle behavior.
       setJoystickEnabled(
@@ -2192,11 +2223,55 @@
       });
     }
 
+    // In mobile game mode, go truly fullscreen (no browser bar) and try to
+    // lock landscape. Must be called synchronously from a user gesture.
+    function requestMobileFullscreen() {
+      if (!mobileGameMode) return;
+      const root = document.documentElement;
+      const req =
+        root.requestFullscreen ||
+        root.webkitRequestFullscreen ||
+        root.webkitRequestFullScreen;
+      if (!req) return; // iPhone Safari: only PWA/home-screen gives fullscreen
+      let p = null;
+      try {
+        p = req.call(root, { navigationUI: "hide" });
+      } catch {
+        try {
+          p = req.call(root);
+        } catch {
+          return;
+        }
+      }
+      const lock = function () {
+        try {
+          if (
+            screen.orientation &&
+            typeof screen.orientation.lock === "function"
+          ) {
+            screen.orientation.lock("landscape").catch(function () {
+              /* not supported / denied — rotate hint covers this */
+            });
+          }
+        } catch {
+          /* ignore */
+        }
+      };
+      if (p && typeof p.then === "function") {
+        p.then(lock).catch(function () {
+          /* fullscreen denied — continue windowed */
+        });
+      } else {
+        lock();
+      }
+    }
+
     // ROM picker overlay: loads the game manifest and mounts a chosen ATR.
     if (window.A8ERomPicker && app) {
       window.A8ERomPicker.init({
         app: app,
         mountDiskAndAutoStart: mountDiskAndAutoStart,
+        onEntryTapped: requestMobileFullscreen,
         onGameStarted: function () {
           updateStatus();
           focusCanvas(false);

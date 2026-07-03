@@ -132,6 +132,15 @@
         btn.appendChild(desc);
       }
       btn.addEventListener("click", function () {
+        // Synchronous hook so fullscreen/orientation requests keep the
+        // user-gesture activation (async fetch would lose it on some browsers).
+        if (hooks && typeof hooks.onEntryTapped === "function") {
+          try {
+            hooks.onEntryTapped(entry);
+          } catch {
+            /* never block loading on fullscreen failures */
+          }
+        }
         loadEntry(entry);
       });
       listEl.appendChild(btn);

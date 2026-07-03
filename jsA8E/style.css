@@ -2883,3 +2883,48 @@ body.mobileGame .screenViewport canvas {
 body:not(.mobileGame) .mobileControls {
   display: none;
 }
+
+/* ===== Rotate-to-landscape hint ===== */
+
+.rotateHint {
+  position: fixed;
+  inset: 0;
+  z-index: 980;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: rgba(5, 9, 16, 0.78);
+  backdrop-filter: blur(2px);
+  color: var(--text);
+  text-align: center;
+  padding: 24px;
+  cursor: pointer;
+}
+
+.rotateHint[hidden] {
+  display: none;
+}
+
+.rotateHintIcon {
+  font-size: 56px;
+  color: var(--accent);
+  animation: rotateHintSpin 2s ease-in-out infinite;
+}
+
+@keyframes rotateHintSpin {
+  0%, 60%, 100% { transform: rotate(0deg); }
+  25%, 40% { transform: rotate(90deg); }
+}
+
+.rotateHintText {
+  font-family: "Exo 2", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 800;
+  font-size: 20px;
+}
+
+.rotateHintSub {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
