@@ -1,0 +1,265 @@
+# A8E (Native C/SDL Emulator)
+
+> Hardware emulation reference: Before implementing any Atari 800 XL PAL machine related hardware emulation, use the [AHRM](/AHRM/index.md) as reference.
+
+A native Atari 800 XL emulator written in C, utilizing SDL 1.2 style headers (`<SDL/SDL.h>`).
+
+## Table of Contents
+
+- [Requirements & Usage](#requirements--usage)
+- [Controls](#controls)
+- [Building from Source](#building-from-source)
+- [Windows - Visual Studio / MSVC (Recommended)](#windows---visual-studio--msvc-recommended)
+- [Windows - MSYS2 / MinGW-w64](#windows---msys2--mingw-w64)
+- [Linux (Ubuntu / Debian / Fedora / RHEL / Arch Linux)](#linux-ubuntu--debian--fedora--rhel--arch-linux)
+- [macOS (Homebrew)](#macos-homebrew)
+- [Cross-compiling for Windows (from Linux/macOS)](#cross-compiling-for-windows-from-linuxmacos)
+- [Cross-compiling Linux from macOS](#cross-compiling-linux-from-macos)
+- [Manual Compilation (Unix/Linux/macOS)](#manual-compilation-unixlinuxmacos)
+- [Debugging & Logging](#debugging--logging)
+
+## Requirements & Usage
+
+To run A8E, the following ROM files must be present in your current working directory:
+* `ATARIXL.ROM` (16 KB)
+* `ATARIBAS.ROM` (8 KB)
+
+## Current Emulation Status
+
+The native core includes the current raster-timing pass:
+
+- visible scanlines draw playfield/background state on the per-color-clock path
+- visible player/missile output is interleaved on the scanline timing path
+- visible blank/background-only lines spend the leading color-burst clocks invisibly before drawing the rest of the line
+
+The native timing pass now covers the legacy-style active-line geometry, HSCROL handling, visible PMG interleaving, and blank-line color-burst behavior. Remaining work is continued regression verification against real raster-effect content and any localized title-specific differences that turn up during that sweep. See [../legacy/COLOR_CLOCK_ACCURACY.md](../legacy/COLOR_CLOCK_ACCURACY.md) for the current verification status.
+
+**Command Line:**
+```text
+A8E [options] [disk.atr|program.xex]
+```
+
+**Options & Arguments:**
+* `disk.atr` / `program.xex`: Pass an ATR image or Atari executable as the first argument. `.xex` files are converted to a temporary ATR layout at load time. If no argument is passed, the emulator defaults to looking for `d1.atr`.
+* `-f` / `-F`: Launch in fullscreen mode. Uses desktop-resolution fullscreen (`SDL_WINDOW_FULLSCREEN_DESKTOP`) — the display mode is never changed, so the aspect ratio is correct on widescreen monitors and the desktop is never left in a degraded state if the app crashes. The window can be toggled at runtime with **Alt+Enter**.
+* `-b` / `-B`: Boot **with** BASIC enabled. By default, A8E simulates holding the OPTION key to disable BASIC. Passing this flag releases the console buttons.
+
+## Controls
+
+For standard keyboard, joystick, and console mappings, please see the [main README](../README.md#controls).
+
+**Native-Specific Keys:**
+| Key | Function |
+|-----|----------|
+| **Alt+Enter** | Toggle fullscreen / windowed mode at runtime. |
+| **Alt+F4** | Quit the emulator (standard OS close shortcut). |
+| **F11** | Turbo mode (hold) + attempts to reload `D1.ATR` from the current directory (case-sensitive on UNIX-like systems). |
+| **F12** | Start live CPU disassembly. *Note: This is a one-way latch and requires the `ENABLE_VERBOSE_DEBUGGING` compile flag. Restart the emulator to stop.* |
+
+---
+
+## Building from Source
+
+Building requires **SDL 2** development headers. CMake 3.16+ is recommended but not strictly required (see the manual compilation section for a direct `clang`/`gcc` build).
+
+The build process aims to produce **portable standalone binaries** with minimal external runtime dependencies. Where possible, static linking is used to achieve this.
+For local release binaries with single-config generators (Makefiles/Ninja/MinGW Makefiles), pass `-DCMAKE_BUILD_TYPE=Release` during configure.
+
+> **Version Note:** The window caption version is injected at compile time via `../jsA8E/version.json`. If this file is missing, the build defaults to `dev`.
+>
+> **Shell Note:** Run `powershell` blocks in PowerShell. Run `sh` blocks in Bash/Zsh (or the MSYS2 MinGW shell where specified).
+
+### Windows - Visual Studio / MSVC (Recommended)
+
+This method produces a standalone `.exe` without external DLL dependencies.
+
+#### Prerequisites
+- Install Visual Studio 2022 with the "Desktop development with C++" workload, or the standalone Build Tools.
+- Install an external `vcpkg` checkout and SDL2. Do not clone `vcpkg` into this repository:
+  ```powershell
+  git clone https://github.com/microsoft/vcpkg C:\dev\external\vcpkg
+  cd C:\dev\external\vcpkg
+  .\bootstrap-vcpkg.bat
+  .\vcpkg install sdl2:x64-windows-static
+  ```
+  > **Note:** `vcpkg install sdl2:x64-windows-static` builds SDL2 from source and may take a few minutes.
+  >
+  > Any external path works; the examples below use `C:\dev\external\vcpkg`.
+
+#### Build (PowerShell)
+Run from the repository root:
+```powershell
+cmake -S . -B build/msvc `
+  -G "Visual Studio 17 2022" -A x64 `
+  -DCMAKE_TOOLCHAIN_FILE=C:\dev\external\vcpkg\scripts\buildsystems\vcpkg.cmake `
+  -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+  -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>"
+
+cmake --build build/msvc --config Release
+```
+
+*Executable output: `build\msvc\A8E\Release\A8E.exe`*
+> **Note:** For MSVC static SDL builds, required Win32 system libraries are linked automatically by the project's CMake configuration.
+
+---
+
+### Windows - MSYS2 / MinGW-w64
+
+Produces a standalone `.exe` (statically linked, no external DLLs required).
+
+#### Prerequisites
+- Open the [MSYS2](https://www.msys2.org/) MinGW x64 shell and install tools:
+  ```sh
+  pacman -S --needed mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-make mingw-w64-x86_64-SDL2
+  ```
+
+#### Build (MSYS2 MinGW shell)
+```sh
+cmake -S . -B build/mingw -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS="-static"
+cmake --build build/mingw -j
+```
+
+*Executable output: `build/mingw/A8E/A8E.exe`*
+
+---
+
+### Linux (Ubuntu / Debian / Fedora / RHEL / Arch Linux)
+
+#### Prerequisites
+- **Ubuntu/Debian:** `sudo apt-get install -y build-essential cmake libsdl2-dev`
+- **Fedora/RHEL:** `sudo dnf install gcc cmake SDL2-devel`
+- **Arch Linux:** `sudo pacman -S gcc cmake sdl2`
+
+#### Build (Bash/Zsh)
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+```
+
+*Executable output: `build/A8E/A8E`*
+
+---
+
+### macOS (Homebrew)
+
+#### Prerequisites
+```sh
+xcode-select --install
+brew install cmake sdl2
+```
+
+#### Build (Zsh/Bash)
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+```
+
+*Executable output: `build/A8E/A8E`*
+
+---
+
+### Cross-compiling for Windows (from Linux/macOS)
+
+You can cross-compile a Windows `.exe` from Linux or macOS with MinGW-w64 and Windows-target SDL2 static libraries.
+
+#### Prerequisites
+- Linux: install MinGW-w64 (`sudo apt-get install gcc-mingw-w64` on Ubuntu/Debian, or distro equivalent).
+- macOS: install MinGW-w64 (`brew install mingw-w64`).
+- Obtain Windows SDL2 static libraries (for example from MSYS2 MinGW packages).
+- Replace placeholder paths like `<path-to-mingw>` with real paths on your machine.
+
+#### Build (Bash/Zsh)
+```sh
+cmake -S . -B build/win64 \
+  -DCMAKE_SYSTEM_NAME=Windows \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
+  -DCMAKE_RC_COMPILER=x86_64-w64-mingw32-windres \
+  -DSDL2_INCLUDE_DIRS=<path-to-mingw>/include/SDL2 \
+  -DSDL2_LIBRARIES=<path-to-mingw>/lib/libSDL2.a \
+  -DCMAKE_EXE_LINKER_FLAGS="-static"
+
+cmake --build build/win64 -j
+```
+
+*Executable output (typical): `build/win64/A8E/A8E.exe`*
+
+---
+
+### Cross-compiling Linux from macOS
+
+You can cross-compile a Linux binary from macOS using a Linux cross-toolchain.
+
+#### Prerequisites
+- Install a Linux cross-toolchain: `brew install x86_64-linux-gnu-gcc` (or similar).
+- Obtain Linux SDL2 static libraries and headers (e.g., build from source or extract from a Linux system).
+- Replace placeholder paths like `<path-to-linux-sysroot>` with real paths on your machine.
+
+#### Build (Zsh/Bash)
+```sh
+cmake -S . -B build/linux \
+  -DCMAKE_SYSTEM_NAME=Linux \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER=x86_64-linux-gnu-gcc \
+  -DSDL2_INCLUDE_DIRS=<path-to-linux-sysroot>/include/SDL2 \
+  -DSDL2_LIBRARIES=<path-to-linux-sysroot>/lib/libSDL2.a \
+  -DCMAKE_EXE_LINKER_FLAGS="-static"
+
+cmake --build build/linux -j
+```
+
+*Executable output (typical): `build/linux/A8E/A8E`*
+
+---
+
+### Manual Compilation (Unix/Linux/macOS)
+
+If CMake is unavailable, you can compile all sources directly in a Unix-like shell (`bash`/`zsh`) with `clang` or `gcc`. The `sdl2-config` helper (installed alongside SDL2 development packages) prints the correct flags automatically.
+
+#### Prerequisites
+- Install SDL 2 development headers (`libsdl2-dev`, `SDL2-devel`, or `sdl2` depending on your distro).
+
+#### Build (Bash/Zsh)
+```sh
+# from the A8E source directory
+clang -std=c99 -O2 -Wall \
+      -I. $(sdl2-config --cflags) \
+      6502.c A8E.c Antic.c AtariIo.c Gtia.c Pia.c Pokey.c \
+      -o A8E \
+      $(sdl2-config --libs) -lm
+```
+
+If `sdl2-config` is not on your path, spell the flags out manually (macOS example):
+
+```sh
+clang -std=c99 -O2 -Wall \
+      -I. -I/usr/local/include -I/usr/local/include/SDL2 \
+      6502.c A8E.c Antic.c AtariIo.c Gtia.c Pia.c Pokey.c \
+      -o A8E \
+      -L/usr/local/lib -lSDL2main -lSDL2 -lm -framework Cocoa
+```
+
+On Linux or other Unix systems, drop `-framework Cocoa` and use your platform's SDL2 linker flags. Replace `/usr/local` with the prefix where SDL2 is installed (e.g. `/opt/homebrew` on Apple Silicon or `/usr` on many Linux distributions). Substitute `gcc` for `clang` if needed. Add `-DA8E_BUILD_VERSION="…"` to override the version string.
+
+---
+
+## Debugging & Logging
+
+Debug output is controlled via compile-time `#define` macros in `AtariIo.h`. You can uncomment them in the header or pass them directly via `CMAKE_C_FLAGS`.
+
+**CMake Example:**
+```sh
+cmake -S . -B build -DCMAKE_C_FLAGS="-DVERBOSE_REGISTER -DVERBOSE_SIO"
+cmake --build build -j
+```
+
+**Available Macros:**
+| Macro | Function / Log Output |
+|-------|-----------------------|
+| `ENABLE_VERBOSE_DEBUGGING` | Allows runtime CPU disassembly via **F12** (Active by default). |
+| `VERBOSE_NMI` / `VERBOSE_IRQ` | NMI and IRQ events. |
+| `VERBOSE_SIO` | Serial I/O command and data phases. |
+| `VERBOSE_ROM_SWITCH` | ROM bank switching (PIA port B). |
+| `VERBOSE_REGISTER` | **Warning: Noticeably slows emulation.** Logs all chip register reads/writes (GTIA, Pokey, Antic, PIA). |
+| `VERBOSE_DL` | ANTIC display-list fetch activity. |
+| `DISABLE_COLLISIONS` | Disables GTIA sprite/playfield collision detection. |

@@ -1,0 +1,2168 @@
+(function () {
+  "use strict";
+
+  const API_VERSION = "1";
+  const ARTIFACT_SCHEMA_VERSION = "2";
+  const SDLK_UP = 273;
+  const SDLK_DOWN = 274;
+  const SDLK_RIGHT = 275;
+  const SDLK_LEFT = 276;
+  const SDLK_OPTION = 283;
+  const SDLK_SELECT = 284;
+  const SDLK_START = 285;
+  const SDLK_TRIGGER_0 = 308;
+  const hwApi =
+    window.A8EHw && typeof window.A8EHw.createApi === "function"
+      ? window.A8EHw.createApi()
+      : null;
+  const ATARI_CPU_HZ_PAL =
+    hwApi && typeof hwApi.ATARI_CPU_HZ_PAL === "number"
+      ? hwApi.ATARI_CPU_HZ_PAL
+      : 1773447;
+  const CYCLES_PER_FRAME =
+    hwApi &&
+    typeof hwApi.CYCLES_PER_LINE === "number" &&
+    typeof hwApi.LINES_PER_SCREEN_PAL === "number"
+      ? (hwApi.CYCLES_PER_LINE | 0) * (hwApi.LINES_PER_SCREEN_PAL | 0)
+      : 35568;
+
+  const CODE_TABLE =
+    window.A8ECpuTables && typeof window.A8ECpuTables.buildCodeTable === "function"
+      ? window.A8ECpuTables.buildCodeTable()
+      : null;
+  const PAUSE_REASONS = new Set([
+    "pause",
+    "breakpoint",
+    "step",
+    "stepOver",
+    "pc",
+    "pauseAddress",
+    "instructionLimit",
+    "cycleLimit",
+    "tight_loop",
+    "fault_illegal_opcode",
+    "fault_execution_error",
+    "reset",
+  ]);
+  const DEFAULT_SYSTEM_STATE_TIMEOUT_MS = 1500;
+
+  let currentApp = null;
+  let currentCanvas = null;
+  let currentFocusCanvas = null;
+  let currentUpdateStatus = null;
+  let readyResolve = null;
+  let readyPromise = null;
+  let debugUnsubscribe = null;
+  let hostFsUnsubscribe = null;
+  let lastDebugState = null;
+  let lastPauseSignature = "";
+  let artifactHelpers = null;
+  let mediaHelpers = null;
+  let xexHelpers = null;
+  let buildHelpers = null;
+  let nextSubscriptionId = 1;
+  const eventSubscriptions = new Map();
+  const AutomationUtil = window.A8EAutomationUtil;
+  if (!AutomationUtil) {
+    throw new Error("A8EAutomationUtil is unavailable");
+  }
+  const AutomationArtifacts = window.A8EAutomationArtifacts;
+  if (!AutomationArtifacts) {
+    throw new Error("A8EAutomationArtifacts is unavailable");
+  }
+  const AutomationMedia = window.A8EAutomationMedia;
+  if (!AutomationMedia) {
+    throw new Error("A8EAutomationMedia is unavailable");
+  }
+  const AutomationXex = window.A8EAutomationXex;
+  if (!AutomationXex) {
+    throw new Error("A8EAutomationXex is unavailable");
+  }
+  const AutomationBuild = window.A8EAutomationBuild;
+  if (!AutomationBuild) {
+    throw new Error("A8EAutomationBuild is unavailable");
+  }
+  const clamp16 = AutomationUtil.clamp16;
+  const clamp8 = AutomationUtil.clamp8;
+  const normalizeResetOptions = AutomationUtil.normalizeResetOptions;
+  const isArrayBufferLike = AutomationUtil.isArrayBufferLike;
+  const isDataViewLike = AutomationUtil.isDataViewLike;
+  const isBinaryView = AutomationUtil.isBinaryView;
+  const toUint8Array = AutomationUtil.toUint8Array;
+  const toArrayBuffer = AutomationUtil.toArrayBuffer;
+  const bytesToBase64 = AutomationUtil.bytesToBase64;
+  const bytesToHex = AutomationUtil.bytesToHex;
+  const encodeText = AutomationUtil.encodeText;
+  const decodeText = AutomationUtil.decodeText;
+  const serializeAutomationError = AutomationUtil.serializeAutomationError;
+  const createAutomationError = AutomationUtil.createAutomationError;
+  const buildUrlWithCacheControl = AutomationUtil.buildUrlWithCacheControl;
+  const buildFetchInit = AutomationUtil.buildFetchInit;
+  const buildFailureDescriptor = AutomationUtil.buildFailureDescriptor;
+  const buildXexLaunchSummary = AutomationUtil.buildXexLaunchSummary;
+  const buildXexRunConfiguration = AutomationUtil.buildXexRunConfiguration;
+  const cloneDebugState = AutomationUtil.cloneDebugState;
+  const cloneMountedMediaState = AutomationUtil.cloneMountedMediaState;
+  const cloneTraceEntries = AutomationUtil.cloneTraceEntries;
+  const cloneXexPreflightReport = AutomationUtil.cloneXexPreflightReport;
+  const counterDelta = AutomationUtil.counterDelta;
+  const normalizeConsoleKeyState = AutomationUtil.normalizeConsoleKeyState;
+  const normalizeRunConfiguration = AutomationUtil.normalizeRunConfiguration;
+  const normalizeTimeoutMs = AutomationUtil.normalizeTimeoutMs;
+  const parseCycleDuration = AutomationUtil.parseCycleDuration;
+  const parseMs = AutomationUtil.parseMs;
+  const sleep = AutomationUtil.sleep;
+  const withTimeout = AutomationUtil.withTimeout;
+
+  function resetReadyPromise() {
+    readyPromise = new Promise(function (resolve) {
+      readyResolve = resolve;
+    });
+  }
+
+  resetReadyPromise();
+
+  async function getApp() {
+    if (currentApp) return currentApp;
+    await readyPromise;
+    if (!currentApp) {
+      throw new Error("A8EAutomation is not attached to a running emulator");
+    }
+    return currentApp;
+  }
+
+  async function readAppDebugState(app) {
+    if (!app) return null;
+    if (typeof app.getDebugStateAsync === "function") {
+      return Promise.resolve(app.getDebugStateAsync());
+    }
+    if (typeof app.getDebugState === "function") {
+      return Promise.resolve(app.getDebugState());
+    }
+    return null;
+  }
+
+  async function readSystemStatePart(part, producer, fallbackValue, timeoutMs) {
+    try {
+      const value = await withTimeout(
+        Promise.resolve().then(producer),
+        timeoutMs,
+        function () {
+          return createAutomationError({
+            operation: "getSystemState",
+            phase: "system_state_timeout",
+            code: "system_state_timeout",
+            message:
+              'Timed out while reading getSystemState() part "' +
+              String(part || "unknown") +
+              '"',
+            details: {
+              part: String(part || "unknown"),
+              timeoutMs: normalizeTimeoutMs(timeoutMs, DEFAULT_SYSTEM_STATE_TIMEOUT_MS),
+            },
+          });
+        },
+      );
+      return {
+        value: value === undefined ? fallbackValue : value,
+        error: null,
+      };
+    } catch (err) {
+      return {
+        value: fallbackValue,
+        error: serializeAutomationError(
+          createAutomationError({
+            operation: "getSystemState",
+            phase:
+              err && err.phase ? String(err.phase) : "system_state_part_failed",
+            code:
+              err && err.code ? String(err.code) : "system_state_part_failed",
+            message:
+              'Failed to read getSystemState() part "' +
+              String(part || "unknown") +
+              '"',
+            details: {
+              part: String(part || "unknown"),
+              timeoutMs: normalizeTimeoutMs(timeoutMs, DEFAULT_SYSTEM_STATE_TIMEOUT_MS),
+            },
+            cause: err,
+          }),
+        ),
+      };
+    }
+  }
+
+  async function getMountedMediaForSystemState(app, timeoutMs) {
+    const tasks = [];
+    for (let i = 0; i < 8; i++) {
+      tasks.push(
+        readSystemStatePart(
+          "media.slot." + i,
+          async function () {
+            if (typeof app.getMountedDiskForDeviceSlot !== "function") return null;
+            return app.getMountedDiskForDeviceSlot(i);
+          },
+          null,
+          timeoutMs,
+        ).then(function (result) {
+          const info = result.value;
+          if (info) {
+            return {
+              slot: {
+                slot: i,
+                mounted: true,
+                deviceSlot:
+                  typeof info.deviceSlot === "number" ? info.deviceSlot | 0 : i,
+                imageIndex:
+                  typeof info.imageIndex === "number" ? info.imageIndex | 0 : null,
+                name: info.name ? String(info.name) : "disk.atr",
+                size: typeof info.size === "number" ? info.size | 0 : 0,
+                writable: info.writable !== false,
+              },
+              error: result.error,
+            };
+          }
+          const mounted =
+            typeof app.hasMountedDiskForDeviceSlot === "function"
+              ? !!app.hasMountedDiskForDeviceSlot(i)
+              : false;
+          return {
+            slot: {
+              slot: i,
+              mounted: mounted,
+            },
+            error: result.error,
+          };
+        }),
+      );
+    }
+    const results = await Promise.all(tasks);
+    const slots = [];
+    const slotErrors = {};
+    for (let i = 0; i < results.length; i++) {
+      slots.push(results[i].slot);
+      if (results[i].error) slotErrors[String(i)] = results[i].error;
+    }
+    return {
+      slots: slots,
+      error:
+        Object.keys(slotErrors).length > 0
+          ? {
+              code: "system_state_media_partial",
+              message: "Mounted media state is partial",
+              details: {
+                slots: slotErrors,
+              },
+            }
+          : null,
+    };
+  }
+
+  function getCurrentHostFs() {
+    if (
+      !currentApp ||
+      !currentApp.hDevice ||
+      typeof currentApp.hDevice.getHostFs !== "function"
+    ) {
+      return null;
+    }
+    return currentApp.hDevice.getHostFs();
+  }
+
+  function notifyStatus() {
+    if (typeof currentUpdateStatus === "function") currentUpdateStatus();
+  }
+
+  function makePauseSignature(state) {
+    if (!state || state.running || !PAUSE_REASONS.has(state.reason || "")) return "";
+    return [
+      state.reason || "",
+      state.pc & 0xffff,
+      state.cycleCounter >>> 0,
+      state.instructionCounter >>> 0,
+      typeof state.breakpointHit === "number" ? state.breakpointHit & 0xffff : -1,
+      typeof state.faultAddress === "number" ? state.faultAddress & 0xffff : -1,
+      typeof state.opcode === "number" ? state.opcode & 0xff : -1,
+    ].join(":");
+  }
+
+  function emitEvent(type, payload) {
+    const envelope = Object.assign(
+      {
+        type: String(type || "event"),
+        timestamp: Date.now(),
+      },
+      payload || {},
+    );
+    eventSubscriptions.forEach(function (sub) {
+      if (!sub) return;
+      if (sub.type !== "*" && sub.type !== envelope.type) return;
+      try {
+        sub.handler(envelope);
+      } catch {
+        // ignore subscriber errors
+      }
+    });
+    return envelope;
+  }
+
+  function emitProgress(operation, phase, payload) {
+    return emitEvent(
+      "progress",
+      Object.assign(
+        {
+          operation: String(operation || "automation"),
+          phase: String(phase || "progress"),
+        },
+        payload || {},
+      ),
+    );
+  }
+
+  function subscribeEvent(type, handler) {
+    const fn = typeof type === "function" ? type : handler;
+    if (typeof fn !== "function") {
+      throw new Error("A8EAutomation.events.subscribe requires a handler");
+    }
+    const id = nextSubscriptionId++;
+    eventSubscriptions.set(id, {
+      type: typeof type === "string" && type.length ? type : "*",
+      handler: fn,
+    });
+    return id;
+  }
+
+  function unsubscribeEvent(id) {
+    return eventSubscriptions.delete(id | 0);
+  }
+
+  function clearBindings() {
+    if (debugUnsubscribe) {
+      try {
+        debugUnsubscribe();
+      } catch {
+        // ignore
+      }
+      debugUnsubscribe = null;
+    }
+    if (hostFsUnsubscribe) {
+      try {
+        hostFsUnsubscribe();
+      } catch {
+        // ignore
+      }
+      hostFsUnsubscribe = null;
+    }
+  }
+
+  function onDebugStateUpdate(rawState) {
+    const state = cloneDebugState(rawState);
+    if (!state) return;
+    lastDebugState = state;
+    emitEvent("debugState", {
+      debugState: cloneDebugState(state),
+    });
+    const signature = makePauseSignature(state);
+    if (signature && signature !== lastPauseSignature) {
+      lastPauseSignature = signature;
+      const pauseEvent = {
+        reason: state.reason,
+        debugState: cloneDebugState(state),
+      };
+      if (typeof state.breakpointHit === "number")
+        {pauseEvent.breakpointHit = state.breakpointHit & 0xffff;}
+      if (typeof state.stopAddress === "number")
+        {pauseEvent.stopAddress = state.stopAddress & 0xffff;}
+      if (typeof state.faultAddress === "number")
+        {pauseEvent.faultAddress = state.faultAddress & 0xffff;}
+      if (state.faultType) pauseEvent.faultType = state.faultType;
+      if (state.faultMessage) pauseEvent.faultMessage = state.faultMessage;
+      if (typeof state.opcode === "number") pauseEvent.opcode = state.opcode & 0xff;
+      emitEvent("pause", pauseEvent);
+      if (state.reason.indexOf("fault_") === 0) emitEvent("fault", pauseEvent);
+    } else if (state.running) {
+      lastPauseSignature = "";
+    }
+  }
+
+  function bindAppListeners() {
+    clearBindings();
+    if (!currentApp) return;
+    if (typeof currentApp.onDebugStateChange === "function") {
+      debugUnsubscribe = currentApp.onDebugStateChange(onDebugStateUpdate);
+    }
+    const hostFs = getCurrentHostFs();
+    if (hostFs && typeof hostFs.onChange === "function") {
+      hostFsUnsubscribe = hostFs.onChange(function () {
+        emitEvent("hostfs", {
+          files:
+            typeof hostFs.listFiles === "function"
+              ? hostFs.listFiles().map(function (entry) {
+                  return {
+                    name: String(entry.name || ""),
+                    size: entry.size | 0,
+                    locked: !!entry.locked,
+                  };
+                })
+              : [],
+        });
+      });
+    }
+    if (typeof currentApp.getDebugState === "function") {
+      onDebugStateUpdate(currentApp.getDebugState());
+    } else {
+      lastDebugState = null;
+      lastPauseSignature = "";
+    }
+  }
+
+  function normalizeRomRequest(kind, data) {
+    return mediaHelpers.normalizeRomRequest(kind, data);
+  }
+
+  function normalizeDiskRequest(data, nameOrOpts, slot) {
+    return mediaHelpers.normalizeDiskRequest(data, nameOrOpts, slot);
+  }
+
+  function normalizeKeyEvent(eventLike) {
+    const raw =
+      typeof eventLike === "string"
+        ? { key: eventLike }
+        : eventLike && typeof eventLike === "object"
+          ? eventLike
+          : {};
+    const key = raw.key !== undefined && raw.key !== null ? String(raw.key) : "";
+    const code =
+      raw.code !== undefined && raw.code !== null ? String(raw.code) : "";
+    const out = {
+      key: key,
+      code: code,
+      ctrlKey: !!raw.ctrlKey,
+      shiftKey: !!raw.shiftKey,
+      altGraph: !!raw.altGraph,
+      virtualCtrlKey: !!raw.virtualCtrlKey,
+      virtualShiftKey: !!raw.virtualShiftKey,
+      sourceToken:
+        raw.sourceToken !== undefined && raw.sourceToken !== null
+          ? String(raw.sourceToken)
+          : "automation:" + key + ":" + code,
+    };
+    if (typeof raw.sdlSym === "number" && isFinite(raw.sdlSym)) {
+      out.sdlSym = raw.sdlSym | 0;
+    }
+    return out;
+  }
+
+  function guessCodeFromChar(ch) {
+    if (/^[a-z]$/i.test(ch)) return "Key" + ch.toUpperCase();
+    if (/^[0-9]$/.test(ch)) return "Digit" + ch;
+    if (ch === " ") return "Space";
+    if (ch === "\n" || ch === "\r") return "Enter";
+    return "";
+  }
+
+  function normalizePauseReasonFilter(raw) {
+    if (!raw) return null;
+    if (Array.isArray(raw)) {
+      return new Set(
+        raw
+          .map(function (value) {
+            return String(value || "");
+          })
+          .filter(Boolean),
+      );
+    }
+    return new Set([String(raw)]);
+  }
+
+  function matchesPauseReason(state, reasonFilter) {
+    if (!state || state.running || !PAUSE_REASONS.has(state.reason || "")) {
+      return false;
+    }
+    if (!reasonFilter || !reasonFilter.size) return true;
+    return reasonFilter.has(String(state.reason || ""));
+  }
+
+  function getImmediatePauseEvent(options) {
+    const reasonFilter = normalizePauseReasonFilter(options && options.reason);
+    if (!matchesPauseReason(lastDebugState, reasonFilter)) return null;
+    return {
+      type: "pause",
+      timestamp: Date.now(),
+      reason: lastDebugState.reason,
+      debugState: cloneDebugState(lastDebugState),
+      breakpointHit:
+        typeof lastDebugState.breakpointHit === "number"
+          ? lastDebugState.breakpointHit & 0xffff
+          : undefined,
+      stopAddress:
+        typeof lastDebugState.stopAddress === "number"
+          ? lastDebugState.stopAddress & 0xffff
+          : undefined,
+      faultAddress:
+        typeof lastDebugState.faultAddress === "number"
+          ? lastDebugState.faultAddress & 0xffff
+          : undefined,
+      faultType: lastDebugState.faultType || undefined,
+      faultMessage: lastDebugState.faultMessage || undefined,
+      opcode:
+        typeof lastDebugState.opcode === "number"
+          ? lastDebugState.opcode & 0xff
+          : undefined,
+    };
+  }
+
+  function waitForEvent(type, predicate, options) {
+    const opts = options || {};
+    const timeoutMs = opts.timeoutMs | 0;
+    return new Promise(function (resolve, reject) {
+      let timerId = 0;
+      let token = 0;
+
+      function cleanup() {
+        if (timerId) clearTimeout(timerId);
+        timerId = 0;
+        if (token) unsubscribeEvent(token);
+        token = 0;
+      }
+
+      function onEvent(event) {
+        let matches = false;
+        try {
+          matches = predicate ? !!predicate(event) : true;
+        } catch (err) {
+          cleanup();
+          reject(err);
+          return;
+        }
+        if (!matches) return;
+        cleanup();
+        resolve(event);
+      }
+
+      token = subscribeEvent(type, onEvent);
+      if (timeoutMs > 0) {
+        timerId = setTimeout(function () {
+          cleanup();
+          if (typeof opts.onTimeout === "function") {
+            Promise.resolve(opts.onTimeout())
+              .then(resolve)
+              .catch(reject);
+            return;
+          }
+          reject(
+            createAutomationError({
+              operation: "waitForEvent",
+              phase: "wait_timeout",
+              message: "A8EAutomation wait timed out",
+            }),
+          );
+        }, timeoutMs);
+      }
+    });
+  }
+
+  async function waitForPause(options) {
+    const opts = options || {};
+    if (opts.immediate !== false) {
+      const immediate = getImmediatePauseEvent(opts);
+      if (immediate) return immediate;
+    }
+    const reasonFilter = normalizePauseReasonFilter(opts.reason);
+    return waitForEvent(
+      "pause",
+      function (event) {
+        if (!event || !event.debugState) return false;
+        if (!reasonFilter || !reasonFilter.size) return true;
+        return reasonFilter.has(String(event.reason || ""));
+      },
+      Object.assign({}, opts, {
+        onTimeout: function () {
+          return buildWaitFailureSnapshot("waitForPause", opts, {
+            reason: "timeout",
+            message: "Pause wait timed out",
+            timedOut: true,
+            timeoutMs: opts.timeoutMs | 0,
+          });
+        },
+      }),
+    );
+  }
+
+  async function waitForRealTime(ms, options) {
+    const opts = options || {};
+    const waitMs = Math.max(0, ms | 0);
+    const app = await getApp();
+    if (!app.isRunning || !app.isRunning() || opts.stopOnPause === false) {
+      await sleep(waitMs);
+      return {
+        ok: true,
+        reason: "time",
+        clock: "real",
+        elapsedMs: waitMs,
+        debugState: await api.getDebugState(),
+      };
+    }
+
+    return new Promise(function (resolve) {
+      let resolved = false;
+      let timerId = 0;
+      let token = 0;
+
+      function cleanup() {
+        if (timerId) clearTimeout(timerId);
+        if (token) unsubscribeEvent(token);
+      }
+
+      function finish(payload) {
+        if (resolved) return;
+        resolved = true;
+        cleanup();
+        resolve(payload);
+      }
+
+      token = subscribeEvent("pause", function (event) {
+        finish({
+          ok: false,
+          reason: event.reason || "pause",
+          clock: "real",
+          elapsedMs: waitMs,
+          pause: event,
+          debugState: event.debugState || null,
+        });
+      });
+      timerId = setTimeout(async function () {
+        finish({
+          ok: true,
+          reason: "time",
+          clock: "real",
+          elapsedMs: waitMs,
+          debugState: await api.getDebugState(),
+        });
+      }, waitMs);
+    });
+  }
+
+  async function waitForCounterDelta(counterKey, count, options) {
+    const opts = options || {};
+    const targetCount = Math.max(0, count | 0);
+    const intervalMs = Math.max(1, opts.pollIntervalMs | 0 || 20);
+    const timeoutMs = normalizeTimeoutMs(opts.timeoutMs);
+    const startedAt = Date.now();
+    const initial = await api.getCounters();
+    if (!initial) {
+      return {
+        ok: false,
+        reason: "unsupported",
+        debugState: await api.getDebugState(),
+      };
+    }
+    if (!targetCount) {
+      return {
+        ok: true,
+        reason: counterKey,
+        delta: 0,
+        counters: initial,
+        debugState: await api.getDebugState(),
+      };
+    }
+    const app = await getApp();
+    if (!app.isRunning || !app.isRunning()) {
+      return {
+        ok: false,
+        reason: "paused",
+        delta: 0,
+        counters: initial,
+        debugState: await api.getDebugState(),
+      };
+    }
+
+    while (true) {
+      const counters = await api.getCounters();
+      const delta = counterDelta(initial[counterKey] >>> 0, counters[counterKey] >>> 0);
+      if (delta >= targetCount) {
+        return {
+          ok: true,
+          reason: counterKey,
+          delta: delta >>> 0,
+          counters: counters,
+          debugState: await api.getDebugState(),
+        };
+      }
+      const state = await api.getDebugState();
+      if (state && !state.running) {
+        return {
+          ok: false,
+          reason: state.reason || "pause",
+          delta: delta >>> 0,
+          counters: counters,
+          debugState: state,
+        };
+      }
+      if (timeoutMs > 0 && Date.now() - startedAt >= timeoutMs) {
+        return buildWaitFailureSnapshot("waitForCounterDelta", opts, {
+          reason: "timeout",
+          message: "Counter wait timed out",
+          timedOut: true,
+          timeoutMs: timeoutMs,
+          counterKey: counterKey,
+          targetCount: targetCount,
+          currentDelta: delta >>> 0,
+        });
+      }
+      await sleep(intervalMs);
+    }
+  }
+
+  async function buildWaitFailureSnapshot(operation, options, failure) {
+    return artifactHelpers.buildWaitFailureSnapshot(operation, options, failure);
+  }
+
+  async function finalizeWaitForPcResult(targetPc, result, options, operation) {
+    return artifactHelpers.finalizeWaitForPcResult(targetPc, result, options, operation);
+  }
+
+  async function readRangeBytes(start, length) {
+    const app = await getApp();
+    const addr = clamp16(start);
+    const size = length | 0;
+    if (size <= 0) return new Uint8Array(0);
+    if (typeof app.readRange === "function") {
+      if (addr + size <= 0x10000) {
+        return toUint8Array(await Promise.resolve(app.readRange(addr, size)));
+      }
+      const head = 0x10000 - addr;
+      const tail = size - head;
+      const headBytes = toUint8Array(await Promise.resolve(app.readRange(addr, head)));
+      const tailBytes = toUint8Array(await Promise.resolve(app.readRange(0, tail)));
+      const out = new Uint8Array(size);
+      out.set(headBytes, 0);
+      out.set(tailBytes, head);
+      return out;
+    }
+    const out = new Uint8Array(size);
+    for (let i = 0; i < size; i++) {
+      out[i] = clamp8(await Promise.resolve(app.readMemory((addr + i) & 0xffff)));
+    }
+    return out;
+  }
+
+  async function readWordValue(address, options) {
+    const opts = options && typeof options === "object" ? options : {};
+    const bytes = await readRangeBytes(address, 2);
+    const littleEndian = opts.littleEndian !== false;
+    const value = littleEndian
+      ? (bytes[0] & 0xff) | ((bytes[1] & 0xff) << 8)
+      : ((bytes[0] & 0xff) << 8) | (bytes[1] & 0xff);
+    if (opts.signed) return value >= 0x8000 ? value - 0x10000 : value;
+    return value & 0xffff;
+  }
+
+  function normalizeWaitMemorySize(value) {
+    return value === 2 ? 2 : 1;
+  }
+
+  async function readMemorySized(address, size, options) {
+    const normalizedSize = normalizeWaitMemorySize(size);
+    if (normalizedSize === 2) {
+      return readWordValue(address, options || null);
+    }
+    return api.readMemory(address);
+  }
+
+  async function getMountedMedia() {
+    const app = await getApp();
+    const slots = [];
+    for (let i = 0; i < 8; i++) {
+      let info = null;
+      if (typeof app.getMountedDiskForDeviceSlot === "function") {
+        info = await Promise.resolve(app.getMountedDiskForDeviceSlot(i));
+      }
+      if (info) {
+        slots.push({
+          slot: i,
+          mounted: true,
+          deviceSlot: typeof info.deviceSlot === "number" ? info.deviceSlot | 0 : i,
+          imageIndex:
+            typeof info.imageIndex === "number" ? info.imageIndex | 0 : null,
+          name: info.name ? String(info.name) : "disk.atr",
+          size: typeof info.size === "number" ? info.size | 0 : 0,
+          writable: info.writable !== false,
+        });
+        continue;
+      }
+      const mounted =
+        typeof app.hasMountedDiskForDeviceSlot === "function"
+          ? !!app.hasMountedDiskForDeviceSlot(i)
+          : false;
+      slots.push({
+        slot: i,
+        mounted: mounted,
+      });
+    }
+    return slots;
+  }
+
+  function sym(name, fallback) {
+    if (!buildHelpers || typeof buildHelpers.sym !== "function") {
+      return fallback !== undefined ? fallback : null;
+    }
+    return buildHelpers.sym(name, fallback);
+  }
+
+  async function assembleSource(spec) {
+    if (!buildHelpers) {
+      throw new Error("A8EAutomationBuild is unavailable");
+    }
+    return buildHelpers.assembleSource(spec);
+  }
+
+  async function assembleHostFile(name, options) {
+    if (!buildHelpers) {
+      throw new Error("A8EAutomationBuild is unavailable");
+    }
+    return buildHelpers.assembleHostFile(name, options);
+  }
+
+  async function getSourceContext(options) {
+    if (!buildHelpers) {
+      throw new Error("A8EAutomationBuild is unavailable");
+    }
+    return buildHelpers.getSourceContext(options);
+  }
+
+  async function disassemble(options) {
+    if (!buildHelpers) {
+      throw new Error("A8EAutomationBuild is unavailable");
+    }
+    return buildHelpers.disassemble(options);
+  }
+
+  async function getLastBuildResult(options) {
+    if (!buildHelpers || typeof buildHelpers.getLastBuildResult !== "function") {
+      return null;
+    }
+    return buildHelpers.getLastBuildResult(options || {});
+  }
+
+  async function buildAndRun(source, options) {
+    if (!buildHelpers) {
+      throw new Error("A8EAutomationBuild is unavailable");
+    }
+    return buildHelpers.buildAndRun(source, options);
+  }
+
+  async function mountDiskFromUrl(url, options) {
+    return mediaHelpers.mountDiskFromUrl(url, options);
+  }
+
+  async function loadRomFromUrl(kind, url, options) {
+    return mediaHelpers.loadRomFromUrl(kind, url, options);
+  }
+
+  async function runXexFromUrl(url, options) {
+    return mediaHelpers.runXexFromUrl(url, options);
+  }
+
+  async function runXex(spec) {
+    if (!xexHelpers) {
+      throw new Error("A8EAutomationXex is unavailable");
+    }
+    return xexHelpers.runXex(spec);
+  }
+
+  async function buildArtifactBundle(options) {
+    return artifactHelpers.buildArtifactBundle(options);
+  }
+
+  async function captureFailureState(options) {
+    return artifactHelpers.captureFailureState(options);
+  }
+
+  async function getCapabilities() {
+    const app = await getApp();
+    const hostFs = getCurrentHostFs();
+    const hasDiskLoad = typeof app.loadDiskToDeviceSlot === "function";
+    const hasRomLoad =
+      typeof app.loadOsRom === "function" &&
+      typeof app.loadBasicRom === "function";
+    const hasUrlXexLoad =
+      hasDiskLoad &&
+      typeof app.reset === "function" &&
+      typeof app.start === "function";
+    return {
+      apiVersion: API_VERSION,
+      artifactSchemaVersion: ARTIFACT_SCHEMA_VERSION,
+      worker:
+        typeof app.isWorkerBackend === "function"
+          ? !!app.isWorkerBackend()
+          : false,
+      hostfs: !!hostFs,
+      assembler:
+        !!window.A8EAssemblerCore &&
+        typeof window.A8EAssemblerCore.assembleToXex === "function",
+      disk: hasDiskLoad,
+      romLoad: hasRomLoad,
+      screenshot: typeof app.captureScreenshot === "function",
+      artifacts: true,
+      trace: typeof app.getTraceTail === "function",
+      breakpoints: typeof app.setBreakpoints === "function",
+      stepping:
+        typeof app.stepInstructionAsync === "function" ||
+        typeof app.stepInstruction === "function",
+      runUntilPc: typeof app.runUntilPc === "function",
+      sourceContext: true,
+      disassembly: !!CODE_TABLE,
+      joystick: true,
+      consoleKeys: true,
+      consoleKeyState: typeof app.getConsoleKeyState === "function",
+      urlMediaLoad: hasRomLoad || hasDiskLoad || hasUrlXexLoad,
+      urlRomLoad: hasRomLoad,
+      urlDiskLoad: hasDiskLoad,
+      urlXexLoad: hasUrlXexLoad,
+      failureSnapshots: true,
+      progressEvents: true,
+      cacheControl: true,
+      waitPrimitives: true,
+      snapshots:
+        typeof app.saveSnapshot === "function" &&
+        typeof app.loadSnapshot === "function",
+      groupedApi: true,
+      events: true,
+      faultReporting: true,
+      resetPortBOverride: typeof app.reset === "function",
+      memoryWrite:
+        typeof app.writeMemory === "function" &&
+        typeof app.writeRange === "function",
+      memoryWait: typeof app.readMemory === "function",
+    };
+  }
+
+  async function getSystemState(options) {
+    const app = await getApp();
+    const hostFs = getCurrentHostFs();
+    const opts = options && typeof options === "object" ? options : {};
+    const timeoutMs = normalizeTimeoutMs(
+      opts.timeoutMs,
+      DEFAULT_SYSTEM_STATE_TIMEOUT_MS,
+    );
+    const [
+      mountedMediaResult,
+      countersResult,
+      debugStateResult,
+      consoleKeyStateResult,
+      bankStateResult,
+    ] = await Promise.all([
+      getMountedMediaForSystemState(app, timeoutMs),
+      readSystemStatePart("counters", function () {
+        return api.getCounters();
+      }, null, timeoutMs),
+      readSystemStatePart("debugState", function () {
+        return api.getDebugState();
+      }, lastDebugState ? cloneDebugState(lastDebugState) : null, timeoutMs),
+      readSystemStatePart("consoleKeys", function () {
+        return api.getConsoleKeyState();
+      }, null, timeoutMs),
+      readSystemStatePart("bankState", function () {
+        return api.getBankState();
+      }, null, timeoutMs),
+    ]);
+    const partialErrors = {};
+    if (mountedMediaResult.error) partialErrors.media = mountedMediaResult.error;
+    if (countersResult.error) partialErrors.counters = countersResult.error;
+    if (debugStateResult.error) partialErrors.debugState = debugStateResult.error;
+    if (consoleKeyStateResult.error)
+      {partialErrors.consoleKeys = consoleKeyStateResult.error;}
+    if (bankStateResult.error) partialErrors.bankState = bankStateResult.error;
+    return {
+      apiVersion: API_VERSION,
+      artifactSchemaVersion: ARTIFACT_SCHEMA_VERSION,
+      ready: typeof app.isReady === "function" ? !!app.isReady() : false,
+      running: typeof app.isRunning === "function" ? !!app.isRunning() : false,
+      worker:
+        typeof app.isWorkerBackend === "function"
+          ? !!app.isWorkerBackend()
+          : false,
+      rendererBackend:
+        typeof app.getRendererBackend === "function"
+          ? app.getRendererBackend()
+          : "unknown",
+      roms: {
+        osLoaded: typeof app.hasOsRom === "function" ? !!app.hasOsRom() : false,
+        basicLoaded:
+          typeof app.hasBasicRom === "function" ? !!app.hasBasicRom() : false,
+      },
+      media: {
+        deviceSlots: mountedMediaResult.slots,
+      },
+      hostfs: {
+        available: !!hostFs,
+        fileCount:
+          hostFs && typeof hostFs.listFiles === "function"
+            ? hostFs.listFiles().length | 0
+            : 0,
+      },
+      consoleKeys: consoleKeyStateResult.value,
+      counters: countersResult.value,
+      debugState: debugStateResult.value,
+      bankState: bankStateResult.value,
+      lastBuild:
+        buildHelpers && typeof buildHelpers.getLastBuildResult === "function"
+          ? buildHelpers.getLastBuildResult()
+          : null,
+      error:
+        Object.keys(partialErrors).length > 0
+          ? {
+              code: "system_state_partial",
+              message: "getSystemState() returned partial state",
+              details: {
+                timeoutMs: timeoutMs,
+                parts: partialErrors,
+              },
+            }
+          : null,
+    };
+  }
+
+  async function listHostFiles(pattern) {
+    const hostFs = getCurrentHostFs();
+    if (!hostFs || typeof hostFs.listFiles !== "function") return [];
+    return hostFs.listFiles(pattern).map(function (entry) {
+      return {
+        name: String(entry.name || ""),
+        size: entry.size | 0,
+        locked: !!entry.locked,
+      };
+    });
+  }
+
+  async function setHostFile(name, data, options) {
+    const hostFs = getCurrentHostFs();
+    if (!hostFs || typeof hostFs.writeFile !== "function") {
+      throw new Error("A8EAutomation HostFS is unavailable");
+    }
+    const opts = options || {};
+    const normalized =
+      typeof hostFs.normalizeName === "function"
+        ? hostFs.normalizeName(name)
+        : String(name || "").toUpperCase();
+    if (!normalized) throw new Error("A8EAutomation HostFS name is invalid");
+    const bytes =
+      data && typeof data === "object" && data.text !== undefined
+        ? encodeText(String(data.text))
+        : toUint8Array(data);
+    if (!hostFs.writeFile(normalized, bytes)) {
+      throw new Error("A8EAutomation failed to write HostFS file: " + normalized);
+    }
+    if (opts.lock && typeof hostFs.lockFile === "function") hostFs.lockFile(normalized);
+    return {
+      name: normalized,
+      size: bytes.length | 0,
+      locked:
+        opts.lock && typeof hostFs.getStatus === "function"
+          ? !!(hostFs.getStatus(normalized) || {}).locked
+          : false,
+    };
+  }
+
+  async function readHostFile(name, options) {
+    const hostFs = getCurrentHostFs();
+    if (!hostFs || typeof hostFs.readFile !== "function") {
+      throw new Error("A8EAutomation HostFS is unavailable");
+    }
+    const opts = options || {};
+    const normalized =
+      typeof hostFs.normalizeName === "function"
+        ? hostFs.normalizeName(name)
+        : String(name || "").toUpperCase();
+    const data = toUint8Array(hostFs.readFile(normalized));
+    if (!data.length && !hostFs.fileExists(normalized)) return null;
+    if (opts.encoding === "base64") {
+      return {
+        name: normalized,
+        base64: bytesToBase64(data),
+        size: data.length | 0,
+      };
+    }
+    if (opts.encoding === "text") {
+      return {
+        name: normalized,
+        text: decodeText(data),
+        size: data.length | 0,
+      };
+    }
+    return {
+      name: normalized,
+      bytes: Array.from(data),
+      size: data.length | 0,
+    };
+  }
+
+  async function waitForHostFsFile(name, options) {
+    const hostFs = getCurrentHostFs();
+    if (!hostFs || typeof hostFs.fileExists !== "function") {
+      throw new Error("A8EAutomation HostFS is unavailable");
+    }
+    const normalized =
+      typeof hostFs.normalizeName === "function"
+        ? hostFs.normalizeName(name)
+        : String(name || "").toUpperCase();
+    if (hostFs.fileExists(normalized)) {
+      return {
+        type: "hostfs",
+        timestamp: Date.now(),
+        name: normalized,
+      };
+    }
+    const opts = options || {};
+    return waitForEvent(
+      "hostfs",
+      function () {
+        return hostFs.fileExists(normalized);
+      },
+      opts,
+    ).then(function (event) {
+      return Object.assign({}, event, { name: normalized });
+    });
+  }
+
+  async function saveSnapshot(options) {
+    const app = await getApp();
+    if (typeof app.saveSnapshot !== "function") {
+      throw new Error("A8EAutomation.saveSnapshot is unavailable");
+    }
+    const opts = options && typeof options === "object" ? options : {};
+    const state = await readAppDebugState(app);
+    const wasRunning = !!(state && state.running);
+    if (wasRunning) {
+      if (opts.pauseRunning === false) {
+        throw createAutomationError({
+          operation: "saveSnapshot",
+          phase: "snapshot_save_running",
+          code: "snapshot_save_requires_pause",
+          message: "Saving a snapshot requires paused emulation",
+        });
+      }
+      await api.pause();
+    }
+    try {
+      const result = await Promise.resolve(
+        app.saveSnapshot({
+          savedRunning:
+            opts.savedRunning !== undefined ? !!opts.savedRunning : wasRunning,
+          timing: opts.timing === "exact" ? "exact" : undefined,
+        }),
+      );
+      const buffer = toArrayBuffer(result && result.buffer ? result.buffer : null);
+      return {
+        type: "a8e.snapshot",
+        version:
+          result && typeof result.version === "number" ? result.version | 0 : 0,
+        mimeType:
+          result && result.mimeType
+            ? String(result.mimeType)
+            : "application/x-a8e-snapshot",
+        savedAt:
+          result && typeof result.savedAt === "number" ? result.savedAt : Date.now(),
+        savedRunning:
+          result && typeof result.savedRunning === "boolean"
+            ? !!result.savedRunning
+            : wasRunning,
+        byteLength:
+          result && typeof result.byteLength === "number"
+            ? result.byteLength | 0
+            : buffer.byteLength | 0,
+        buffer: buffer,
+        bytes: new Uint8Array(buffer),
+        timing:
+          result && result.timing === "exact" ? "exact" : "frame",
+      };
+    } catch (err) {
+      throw createAutomationError({
+        operation: "saveSnapshot",
+        phase: "snapshot_save_failed",
+        code: "snapshot_save_failed",
+        message: "Failed to save emulator snapshot",
+        cause: err,
+      });
+    }
+  }
+
+  async function loadSnapshot(data, options) {
+    const app = await getApp();
+    if (typeof app.loadSnapshot !== "function") {
+      throw new Error("A8EAutomation.loadSnapshot is unavailable");
+    }
+    const opts = options && typeof options === "object" ? options : {};
+    const input = toArrayBuffer(data);
+    const state = await readAppDebugState(app);
+    if (state && state.running && opts.pauseRunning === false) {
+      throw createAutomationError({
+        operation: "loadSnapshot",
+        phase: "snapshot_load_running",
+        code: "snapshot_load_requires_pause",
+        message: "Loading a snapshot requires paused emulation",
+      });
+    }
+    if (state && state.running) {
+      await api.pause();
+    }
+    try {
+      const result = await Promise.resolve(
+        app.loadSnapshot(input, {
+          resume: opts.resume !== undefined ? opts.resume : "saved",
+        }),
+      );
+      notifyStatus();
+      const debugState = await readAppDebugState(app);
+      return Object.assign(
+        {
+          resumed: !!(debugState && debugState.running),
+          debugState: debugState,
+        },
+        result && typeof result === "object" ? result : {},
+      );
+    } catch (err) {
+      throw createAutomationError({
+        operation: "loadSnapshot",
+        phase: "snapshot_load_failed",
+        code: "snapshot_load_failed",
+        message: "Failed to load emulator snapshot",
+        cause: err,
+      });
+    }
+  }
+
+  const api = {
+    apiVersion: API_VERSION,
+    artifactSchemaVersion: ARTIFACT_SCHEMA_VERSION,
+    attach: function (opts) {
+      currentApp = opts && opts.app ? opts.app : null;
+      currentCanvas = opts && opts.canvas ? opts.canvas : null;
+      currentFocusCanvas =
+        opts && typeof opts.focusCanvas === "function" ? opts.focusCanvas : null;
+      currentUpdateStatus =
+        opts && typeof opts.updateStatus === "function" ? opts.updateStatus : null;
+      lastDebugState = null;
+      lastPauseSignature = "";
+      bindAppListeners();
+      if (currentApp) {
+        if (readyResolve) readyResolve(api);
+        readyResolve = null;
+        readyPromise = Promise.resolve(api);
+        emitEvent("attached", {
+          worker:
+            typeof currentApp.isWorkerBackend === "function"
+              ? !!currentApp.isWorkerBackend()
+              : false,
+        });
+      }
+      return api;
+    },
+    detach: function () {
+      clearBindings();
+      currentApp = null;
+      currentCanvas = null;
+      currentFocusCanvas = null;
+      currentUpdateStatus = null;
+      lastDebugState = null;
+      lastPauseSignature = "";
+      resetReadyPromise();
+    },
+    whenReady: function () {
+      if (currentApp) return Promise.resolve(api);
+      return readyPromise;
+    },
+    getApp: function () {
+      return currentApp;
+    },
+    getCapabilities: getCapabilities,
+    getSystemState: getSystemState,
+    saveSnapshot: saveSnapshot,
+    loadSnapshot: loadSnapshot,
+    sym: sym,
+    peek: function (address) {
+      return api.readMemory(address);
+    },
+    poke: function (address, value) {
+      return api.writeMemory(address, value);
+    },
+    focusDisplay: function () {
+      if (typeof currentFocusCanvas === "function") {
+        currentFocusCanvas(true);
+        return true;
+      }
+      if (currentCanvas && typeof currentCanvas.focus === "function") {
+        try {
+          currentCanvas.focus({ preventScroll: true });
+        } catch {
+          currentCanvas.focus();
+        }
+        return true;
+      }
+      return false;
+    },
+    loadRom: async function (kind, data) {
+      const request = normalizeRomRequest(kind, data);
+      const app = await getApp();
+      try {
+        if (request.kind === "os") app.loadOsRom(request.buffer);
+        else app.loadBasicRom(request.buffer);
+      } catch (err) {
+        throw createAutomationError({
+          operation: "loadRom",
+          phase: "rom_load",
+          message: "Failed to load " + request.kind + " ROM",
+          details: {
+            kind: request.kind,
+          },
+          cause: err,
+        });
+      }
+      notifyStatus();
+      return {
+        kind: request.kind,
+        ready: typeof app.isReady === "function" ? !!app.isReady() : true,
+      };
+    },
+    loadOsRom: function (data) {
+      return api.loadRom("os", data);
+    },
+    loadBasicRom: function (data) {
+      return api.loadRom("basic", data);
+    },
+    loadRomFromUrl: loadRomFromUrl,
+    loadOsRomFromUrl: function (url, options) {
+      return api.loadRomFromUrl("os", url, options);
+    },
+    loadBasicRomFromUrl: function (url, options) {
+      return api.loadRomFromUrl("basic", url, options);
+    },
+    mountDisk: async function (data, nameOrOpts, slot) {
+      const request = normalizeDiskRequest(data, nameOrOpts, slot);
+      const app = await getApp();
+      emitProgress("mountDisk", "media_accepted", {
+        name: request.name,
+        slot: request.slot,
+      });
+      let mountResult = null;
+      try {
+        if (typeof app.loadDiskToDeviceSlotDetailed === "function") {
+          mountResult = await Promise.resolve(
+            app.loadDiskToDeviceSlotDetailed(
+              request.buffer,
+              request.name,
+              request.slot,
+              null,
+            ),
+          );
+        } else {
+          app.loadDiskToDeviceSlot(request.buffer, request.name, request.slot);
+        }
+      } catch (err) {
+        throw createAutomationError({
+          operation: "mountDisk",
+          phase: "disk_mount",
+          message: "Failed to mount disk image",
+          details: {
+            name: request.name,
+            slot: request.slot,
+          },
+          cause: err,
+        });
+      }
+      emitProgress("mountDisk", "disk_mounted", {
+        name: request.name,
+        slot: request.slot,
+      });
+      notifyStatus();
+      return Object.assign({
+        name: request.name,
+        slot: request.slot,
+      }, mountResult && typeof mountResult === "object" ? {
+        imageIndex:
+          typeof mountResult.imageIndex === "number"
+            ? mountResult.imageIndex | 0
+            : undefined,
+        format: mountResult.format ? String(mountResult.format) : undefined,
+        mountedByteLength:
+          typeof mountResult.mountedByteLength === "number"
+            ? mountResult.mountedByteLength | 0
+            : undefined,
+      } : null);
+    },
+    mountDiskFromUrl: mountDiskFromUrl,
+    loadDisk: function (data, nameOrOpts, slot) {
+      return api.mountDisk(data, nameOrOpts, slot);
+    },
+    unmountDisk: async function (slot) {
+      const app = await getApp();
+      if (typeof app.unmountDeviceSlot !== "function") {
+        throw new Error("A8EAutomation.unmountDisk is unavailable");
+      }
+      app.unmountDeviceSlot(slot | 0);
+      notifyStatus();
+      return {
+        slot: slot | 0,
+      };
+    },
+    getMountedMedia: getMountedMedia,
+    start: async function () {
+      const app = await getApp();
+      if (typeof currentFocusCanvas === "function") currentFocusCanvas(false);
+      try {
+        await Promise.resolve(app.start());
+      } catch (err) {
+        throw createAutomationError({
+          operation: "start",
+          phase: "system_start",
+          code: "system_start_failed",
+          message: "Failed to start emulator",
+          cause: err,
+        });
+      }
+      notifyStatus();
+      return readAppDebugState(app);
+    },
+    pause: async function () {
+      const app = await getApp();
+      try {
+        await Promise.resolve(app.pause());
+      } catch (err) {
+        throw createAutomationError({
+          operation: "pause",
+          phase: "system_pause",
+          code: "system_pause_failed",
+          message: "Failed to pause emulator",
+          cause: err,
+        });
+      }
+      notifyStatus();
+      return readAppDebugState(app);
+    },
+    reset: async function (options) {
+      const app = await getApp();
+      const opts = options && typeof options === "object" ? options : {};
+      const resetOptions = normalizeResetOptions(opts);
+      try {
+        await Promise.resolve(app.reset(resetOptions));
+      } catch (err) {
+        throw createAutomationError({
+          operation: "reset",
+          phase: "system_reset",
+          code: "system_reset_failed",
+          message: "Failed to reset emulator",
+          details: {
+            resetOptions: resetOptions,
+          },
+          cause: err,
+        });
+      }
+      notifyStatus();
+      const state = await readAppDebugState(app);
+      if (opts.kind || resetOptions) {
+        return {
+          requestedKind: opts.kind ? String(opts.kind) : "cold",
+          actualKind: "cold",
+          resetOptions: resetOptions,
+          debugState: state,
+        };
+      }
+      return state;
+    },
+    boot: async function (options) {
+      const opts = options || {};
+      if (opts.reset !== false) {
+        await api.reset(Object.assign({}, opts, {
+          kind: opts.kind || "cold",
+        }));
+      }
+      if (opts.start !== false) await api.start();
+      return api.getSystemState();
+    },
+    reload: async function (options) {
+      const targetUrl = buildUrlWithCacheControl(window.location.href, options || {});
+      setTimeout(function () {
+        window.location.assign(targetUrl);
+      }, 0);
+      return {
+        reloading: true,
+        url: targetUrl,
+      };
+    },
+    dispose: async function () {
+      const app = await getApp();
+      if (typeof app.dispose === "function") app.dispose();
+      api.detach();
+      return true;
+    },
+    waitForPause: waitForPause,
+    waitForTime: async function (options) {
+      const isBare = typeof options === "number" || typeof options === "string";
+      const opts = isBare || !options ? {} : options;
+      const ms = Math.max(0, parseMs(isBare ? options : opts.ms));
+      const clock = opts.clock === "emulated" ? "emulated" : "real";
+      if (clock === "real") return waitForRealTime(ms, opts);
+      const cycles = Math.max(0, Math.round((ms / 1000) * ATARI_CPU_HZ_PAL));
+      const result = await waitForCounterDelta("cycleCounter", cycles, opts);
+      result.clock = "emulated";
+      result.elapsedMs = ms;
+      return result;
+    },
+    waitForFrames: async function (options) {
+      const isBare = typeof options === "number";
+      const opts = isBare || !options ? {} : options;
+      const frames = Math.max(0, isBare ? (options | 0) : (opts.count | 0));
+      const result = await waitForCounterDelta(
+        "cycleCounter",
+        frames * CYCLES_PER_FRAME,
+        opts,
+      );
+      result.frames = frames;
+      return result;
+    },
+    waitForCycles: function (options) {
+      const isBare = typeof options === "number" || typeof options === "string";
+      const opts = isBare || !options ? {} : options;
+      const rawCount = isBare ? options : opts.count;
+      return waitForCounterDelta("cycleCounter", parseCycleDuration(rawCount), opts);
+    },
+    setBreakpoints: async function (addresses) {
+      const app = await getApp();
+      const list = typeof addresses === "number"
+        ? [addresses]
+        : Array.isArray(addresses) ? addresses.slice(0) : [];
+      const result =
+        typeof app.setBreakpoints === "function" ? app.setBreakpoints(list) : 0;
+      return typeof result === "number" ? result : list.length;
+    },
+    stepInstruction: async function () {
+      const app = await getApp();
+      if (typeof app.stepInstructionAsync === "function") {
+        return app.stepInstructionAsync();
+      }
+      return {
+        ok: !!(app.stepInstruction && app.stepInstruction()),
+        debugState: await readAppDebugState(app),
+        counters: typeof app.getCounters === "function" ? app.getCounters() : null,
+        traceTail: typeof app.getTraceTail === "function" ? app.getTraceTail(32) : [],
+      };
+    },
+    stepOver: async function () {
+      const app = await getApp();
+      if (typeof app.stepOverAsync === "function") {
+        return app.stepOverAsync();
+      }
+      return {
+        ok: !!(app.stepOver && app.stepOver()),
+        debugState: await readAppDebugState(app),
+        counters: typeof app.getCounters === "function" ? app.getCounters() : null,
+        traceTail: typeof app.getTraceTail === "function" ? app.getTraceTail(32) : [],
+      };
+    },
+    runUntilPc: async function (targetPc, opts) {
+      const app = await getApp();
+      if (typeof app.runUntilPc !== "function") {
+        throw new Error("A8EAutomation.runUntilPc is unavailable");
+      }
+      return app.runUntilPc(targetPc, opts || null);
+    },
+    runUntilPcOrSnapshot: async function (targetPc, opts) {
+      const options = opts || {};
+      const app = await getApp();
+      const normalizedPc = clamp16(targetPc);
+      const state = await api.getDebugState();
+      emitProgress("runUntilPcOrSnapshot", "wait_started", {
+        targetPc: normalizedPc,
+      });
+      if (state && state.running && options.pauseRunning !== false) {
+        await api.pause();
+      }
+      if (typeof app.runUntilPc !== "function") {
+        return buildWaitFailureSnapshot("runUntilPcOrSnapshot", options, {
+          reason: "unsupported",
+          message: "Paused-mode PC execution is unavailable",
+          targetPc: normalizedPc,
+        });
+      }
+      const result = await Promise.resolve(app.runUntilPc(normalizedPc, options || null));
+      return finalizeWaitForPcResult(
+        normalizedPc,
+        result,
+        options,
+        "runUntilPcOrSnapshot",
+      );
+    },
+    waitForPc: async function (targetPc, options) {
+      const app = await getApp();
+      const normalizedPc = clamp16(targetPc);
+      const state = await api.getDebugState();
+      if (state && !state.running && typeof app.runUntilPc === "function") {
+        const result = await Promise.resolve(app.runUntilPc(normalizedPc, options || null));
+        return finalizeWaitForPcResult(normalizedPc, result, options || {}, "waitForPc");
+      }
+      return waitForEvent(
+        "pause",
+        function (event) {
+          return !!(
+            event &&
+            event.debugState &&
+            clamp16(event.debugState.pc) === normalizedPc
+          );
+        },
+        Object.assign({}, options || {}, {
+          onTimeout: function () {
+            return buildWaitFailureSnapshot("waitForPc", options || {}, {
+              reason: "timeout",
+              message: "PC wait timed out",
+              timedOut: true,
+              timeoutMs: options && options.timeoutMs ? options.timeoutMs | 0 : 0,
+              targetPc: normalizedPc,
+            });
+          },
+        }),
+      );
+    },
+    waitForBreakpoint: function (options) {
+      return waitForPause(Object.assign({}, options || {}, { reason: "breakpoint" }));
+    },
+    getDebugState: async function () {
+      const app = await getApp();
+      const state = await readAppDebugState(app);
+      const cloned = cloneDebugState(state);
+      if (cloned) lastDebugState = cloned;
+      return cloned;
+    },
+    getCounters: async function () {
+      const app = await getApp();
+      if (typeof app.getCounters === "function") return app.getCounters();
+      return null;
+    },
+    getBankState: async function () {
+      const app = await getApp();
+      if (typeof app.getBankState === "function") return app.getBankState();
+      return null;
+    },
+    getConsoleKeyState: async function () {
+      const app = await getApp();
+      if (typeof app.getConsoleKeyState === "function") {
+        return normalizeConsoleKeyState(await Promise.resolve(app.getConsoleKeyState()));
+      }
+      return normalizeConsoleKeyState(null);
+    },
+    getTraceTail: async function (limit) {
+      const app = await getApp();
+      if (typeof app.getTraceTail === "function") return app.getTraceTail(limit | 0);
+      return [];
+    },
+    readMemory: async function (address) {
+      const app = await getApp();
+      if (typeof app.readMemory === "function") {
+        return (await Promise.resolve(app.readMemory(address | 0))) & 0xff;
+      }
+      return 0;
+    },
+    readRange: async function (start, length, options) {
+      const bytes = await readRangeBytes(start, length);
+      if (options && options.format === "hex") return bytesToHex(bytes);
+      return Array.from(bytes);
+    },
+    readWord: async function (address, options) {
+      return readWordValue(address, options);
+    },
+    readWordSigned: async function (address, options) {
+      return readWordValue(
+        address,
+        Object.assign({}, options || {}, {
+          signed: true,
+        }),
+      );
+    },
+    writeMemory: async function (address, value) {
+      const app = await getApp();
+      if (typeof app.writeMemory !== "function") {
+        throw new Error("A8EAutomation.writeMemory is unavailable");
+      }
+      return clamp8(await Promise.resolve(app.writeMemory(address | 0, value | 0)));
+    },
+    writeRange: async function (start, data) {
+      const app = await getApp();
+      if (typeof app.writeRange !== "function") {
+        throw new Error("A8EAutomation.writeRange is unavailable");
+      }
+      const bytes = toUint8Array(data);
+      const written = await Promise.resolve(app.writeRange(start | 0, bytes));
+      return {
+        start: clamp16(start),
+        length:
+          typeof written === "number" ? Math.max(0, written | 0) : bytes.length | 0,
+      };
+    },
+    writeWord: async function (address, value, options) {
+      const opts = options && typeof options === "object" ? options : {};
+      const word = value & 0xffff;
+      const littleEndian = opts.littleEndian !== false;
+      const bytes = littleEndian
+        ? new Uint8Array([word & 0xff, (word >> 8) & 0xff])
+        : new Uint8Array([(word >> 8) & 0xff, word & 0xff]);
+      const result = await api.writeRange(address, bytes);
+      return {
+        start: result.start,
+        length: result.length | 0,
+        value: word,
+      };
+    },
+    waitForMemory: async function (addressOrOptions, valueArg, optionsArg) {
+      // Support waitForMemory(address, value, options) positional form
+      const opts =
+        typeof addressOrOptions === "number"
+          ? Object.assign(
+              { address: addressOrOptions, value: valueArg },
+              optionsArg || {},
+            )
+          : addressOrOptions && typeof addressOrOptions === "object"
+            ? addressOrOptions
+            : {};
+      const address = clamp16(opts.address);
+      const size = normalizeWaitMemorySize(opts.size | 0);
+      const mask = size === 2 ? clamp16(opts.mask === undefined ? 0xffff : opts.mask) : clamp8(opts.mask === undefined ? 0xff : opts.mask);
+      const predicate = typeof opts.predicate === "function" ? opts.predicate : null;
+      const expectedRaw =
+        opts.value !== undefined && opts.value !== null ? opts.value : 0;
+      const expected = size === 2 ? clamp16(expectedRaw) : clamp8(expectedRaw);
+      const pollIntervalMs = Math.max(1, opts.pollIntervalMs | 0 || 20);
+      const timeoutMs = normalizeTimeoutMs(opts.timeoutMs);
+      const startedAt = Date.now();
+      while (true) {
+        const currentValue = await readMemorySized(address, size, opts);
+        const matched = predicate
+          ? !!predicate(currentValue)
+          : ((currentValue & mask) >>> 0) === ((expected & mask) >>> 0);
+        if (matched) {
+          return {
+            ok: true,
+            reason: "memory",
+            address: address,
+            size: size,
+            value: currentValue,
+            expected: predicate ? undefined : expected,
+            mask: predicate ? undefined : mask,
+            debugState: await api.getDebugState(),
+          };
+        }
+        if (timeoutMs > 0 && Date.now() - startedAt >= timeoutMs) {
+          return buildWaitFailureSnapshot("waitForMemory", opts, {
+            reason: "timeout",
+            message: "Memory wait timed out",
+            timedOut: true,
+            timeoutMs: timeoutMs,
+            address: address,
+            size: size,
+            expected: predicate ? undefined : expected,
+            mask: predicate ? undefined : mask,
+            currentValue: currentValue,
+          });
+        }
+        await sleep(pollIntervalMs);
+      }
+    },
+    getSourceContext: getSourceContext,
+    disassemble: disassemble,
+    captureScreenshot: async function (options) {
+      const app = await getApp();
+      if (typeof app.captureScreenshot !== "function") {
+        throw new Error("A8EAutomation.captureScreenshot is unavailable");
+      }
+      const raw = await Promise.resolve(app.captureScreenshot());
+      const bytes = toUint8Array(
+        raw && raw.bytes !== undefined ? raw.bytes : raw && raw.buffer,
+      );
+      const encoding = options && options.encoding === "bytes" ? "bytes" : "base64";
+      const out = {
+        mimeType: raw && raw.mimeType ? String(raw.mimeType) : "image/png",
+        width: raw && raw.width ? raw.width | 0 : 0,
+        height: raw && raw.height ? raw.height | 0 : 0,
+      };
+      if (encoding === "bytes") out.bytes = Array.from(bytes);
+      else out.base64 = bytesToBase64(bytes);
+      return out;
+    },
+    collectArtifacts: async function (options) {
+      return buildArtifactBundle(options || {});
+    },
+    captureFailureState: async function (options) {
+      return captureFailureState(options || {});
+    },
+    keyDown: async function (eventLike) {
+      const app = await getApp();
+      const ev = normalizeKeyEvent(eventLike);
+      if (typeof app.onKeyDown !== "function") return false;
+      return !!app.onKeyDown(ev);
+    },
+    keyUp: async function (eventLike) {
+      const app = await getApp();
+      const ev = normalizeKeyEvent(eventLike);
+      if (typeof app.onKeyUp !== "function") return false;
+      return !!app.onKeyUp(ev);
+    },
+    tapKey: async function (eventLike, options) {
+      const opts = options || {};
+      await api.keyDown(eventLike);
+      if (opts.holdMs) await sleep(parseMs(opts.holdMs));
+      await api.keyUp(eventLike);
+      if (opts.afterMs) await sleep(parseMs(opts.afterMs));
+      return true;
+    },
+    typeText: async function (text, options) {
+      const opts = options || {};
+      const interKeyDelayMs = parseMs(opts.interKeyDelayMs);
+      const rawText = String(text || "");
+      for (let i = 0; i < rawText.length; i++) {
+        const ch = rawText[i];
+        await api.tapKey({
+          key: ch === "\n" ? "Enter" : ch,
+          code: guessCodeFromChar(ch),
+          shiftKey: ch.toUpperCase() === ch && ch.toLowerCase() !== ch,
+        });
+        if (interKeyDelayMs > 0) await sleep(interKeyDelayMs);
+      }
+      return true;
+    },
+    setJoystick: async function (state) {
+      const next = state && typeof state === "object" ? state : {};
+      const operations = [
+        ["up", !!next.up, { key: "ArrowUp", code: "ArrowUp", sdlSym: SDLK_UP }],
+        ["down", !!next.down, { key: "ArrowDown", code: "ArrowDown", sdlSym: SDLK_DOWN }],
+        ["left", !!next.left, { key: "ArrowLeft", code: "ArrowLeft", sdlSym: SDLK_LEFT }],
+        ["right", !!next.right, { key: "ArrowRight", code: "ArrowRight", sdlSym: SDLK_RIGHT }],
+        ["trigger", !!next.trigger, { key: "Alt", code: "AltLeft", sdlSym: SDLK_TRIGGER_0 }],
+      ];
+      for (let i = 0; i < operations.length; i++) {
+        const entry = operations[i];
+        const event = Object.assign(
+          { sourceToken: "automation:joystick:" + entry[0] },
+          entry[2],
+        );
+        if (entry[1]) await api.keyDown(event);
+        else await api.keyUp(event);
+      }
+      return {
+        up: !!next.up,
+        down: !!next.down,
+        left: !!next.left,
+        right: !!next.right,
+        trigger: !!next.trigger,
+      };
+    },
+    setConsoleKeys: async function (state) {
+      const next = state && typeof state === "object" ? state : {};
+      const operations = [
+        ["option", !!next.option, { key: "F2", code: "F2", sdlSym: SDLK_OPTION }],
+        ["select", !!next.select, { key: "F3", code: "F3", sdlSym: SDLK_SELECT }],
+        ["start", !!next.start, { key: "F4", code: "F4", sdlSym: SDLK_START }],
+      ];
+      for (let i = 0; i < operations.length; i++) {
+        const entry = operations[i];
+        const event = Object.assign(
+          { sourceToken: "automation:console:" + entry[0] },
+          entry[2],
+        );
+        if (entry[1]) await api.keyDown(event);
+        else await api.keyUp(event);
+      }
+      return api.getConsoleKeyState();
+    },
+    pressConsoleKey: async function (key, options) {
+      const opts = options || {};
+      const normalized = String(key || "").toLowerCase();
+      if (normalized !== "option" && normalized !== "select" && normalized !== "start") {
+        throw createAutomationError({
+          operation: "pressConsoleKey",
+          phase: "console_input",
+          message: "Console key must be 'option', 'select', or 'start'",
+        });
+      }
+      const downState = {};
+      downState[normalized] = true;
+      await api.setConsoleKeys(downState);
+      if (opts.holdMs) await sleep(parseMs(opts.holdMs));
+      if (opts.release !== false) {
+        const upState = {};
+        upState[normalized] = false;
+        await api.setConsoleKeys(upState);
+      }
+      if (opts.afterMs) await sleep(parseMs(opts.afterMs));
+      return api.getConsoleKeyState();
+    },
+    releaseAllKeys: async function () {
+      const app = await getApp();
+      if (typeof app.releaseAllKeys === "function") app.releaseAllKeys();
+      return true;
+    },
+    releaseAllInputs: async function () {
+      return api.releaseAllKeys();
+    },
+    listHostFiles: listHostFiles,
+    readHostFile: readHostFile,
+    writeHostFile: function (name, data, options) {
+      return setHostFile(name, data, options);
+    },
+    deleteHostFile: async function (name) {
+      const hostFs = getCurrentHostFs();
+      if (!hostFs || typeof hostFs.deleteFile !== "function") {
+        throw new Error("A8EAutomation HostFS is unavailable");
+      }
+      const normalized =
+        typeof hostFs.normalizeName === "function"
+          ? hostFs.normalizeName(name)
+          : String(name || "").toUpperCase();
+      const ok = hostFs.deleteFile(normalized);
+      if (!ok) throw new Error("Unable to delete HostFS file: " + normalized);
+      return {
+        name: normalized,
+      };
+    },
+    renameHostFile: async function (oldName, newName) {
+      const hostFs = getCurrentHostFs();
+      if (!hostFs || typeof hostFs.renameFile !== "function") {
+        throw new Error("A8EAutomation HostFS is unavailable");
+      }
+      const oldKey =
+        typeof hostFs.normalizeName === "function"
+          ? hostFs.normalizeName(oldName)
+          : String(oldName || "").toUpperCase();
+      const newKey =
+        typeof hostFs.normalizeName === "function"
+          ? hostFs.normalizeName(newName)
+          : String(newName || "").toUpperCase();
+      const ok = hostFs.renameFile(oldKey, newKey);
+      if (!ok) {
+        throw new Error("Unable to rename HostFS file: " + oldKey + " -> " + newKey);
+      }
+      return {
+        oldName: oldKey,
+        newName: newKey,
+      };
+    },
+    lockHostFile: async function (name) {
+      const hostFs = getCurrentHostFs();
+      if (!hostFs || typeof hostFs.lockFile !== "function") {
+        throw new Error("A8EAutomation HostFS is unavailable");
+      }
+      const normalized =
+        typeof hostFs.normalizeName === "function"
+          ? hostFs.normalizeName(name)
+          : String(name || "").toUpperCase();
+      if (!hostFs.lockFile(normalized)) {
+        throw new Error("Unable to lock HostFS file: " + normalized);
+      }
+      return {
+        name: normalized,
+        locked: true,
+      };
+    },
+    unlockHostFile: async function (name) {
+      const hostFs = getCurrentHostFs();
+      if (!hostFs || typeof hostFs.unlockFile !== "function") {
+        throw new Error("A8EAutomation HostFS is unavailable");
+      }
+      const normalized =
+        typeof hostFs.normalizeName === "function"
+          ? hostFs.normalizeName(name)
+          : String(name || "").toUpperCase();
+      if (!hostFs.unlockFile(normalized)) {
+        throw new Error("Unable to unlock HostFS file: " + normalized);
+      }
+      return {
+        name: normalized,
+        locked: false,
+      };
+    },
+    getHostFileStatus: async function (name) {
+      const hostFs = getCurrentHostFs();
+      if (!hostFs || typeof hostFs.getStatus !== "function") return null;
+      const normalized =
+        typeof hostFs.normalizeName === "function"
+          ? hostFs.normalizeName(name)
+          : String(name || "").toUpperCase();
+      return hostFs.getStatus(normalized);
+    },
+    waitForHostFsFile: waitForHostFsFile,
+    assembleSource: assembleSource,
+    assembleHostFile: assembleHostFile,
+    getLastBuildResult: getLastBuildResult,
+    runXexFromUrl: runXexFromUrl,
+    runXex: runXex,
+    buildAndRun: buildAndRun,
+    events: {
+      subscribe: subscribeEvent,
+      unsubscribe: unsubscribeEvent,
+    },
+  };
+
+  mediaHelpers = AutomationMedia.createApi({
+    api: api,
+    runXex: runXex,
+    getCurrentHostFs: getCurrentHostFs,
+    emitProgress: emitProgress,
+    buildUrlWithCacheControl: buildUrlWithCacheControl,
+    buildFetchInit: buildFetchInit,
+    createAutomationError: createAutomationError,
+    isArrayBufferLike: isArrayBufferLike,
+    isDataViewLike: isDataViewLike,
+    isBinaryView: isBinaryView,
+    toArrayBuffer: toArrayBuffer,
+    toUint8Array: toUint8Array,
+    decodeText: decodeText,
+  });
+
+  artifactHelpers = AutomationArtifacts.createApi({
+    api: api,
+    apiVersion: API_VERSION,
+    artifactSchemaVersion: ARTIFACT_SCHEMA_VERSION,
+    getApp: getApp,
+    emitProgress: emitProgress,
+    normalizeRunConfiguration: normalizeRunConfiguration,
+    buildFailureDescriptor: buildFailureDescriptor,
+    buildXexLaunchSummary: buildXexLaunchSummary,
+    buildXexRunConfiguration: buildXexRunConfiguration,
+    cloneDebugState: cloneDebugState,
+    cloneMountedMediaState: cloneMountedMediaState,
+    cloneTraceEntries: cloneTraceEntries,
+    cloneXexPreflightReport: cloneXexPreflightReport,
+    clamp16: clamp16,
+    serializeAutomationError: serializeAutomationError,
+  });
+
+  xexHelpers = AutomationXex.createApi({
+    api: api,
+    getApp: getApp,
+    getCurrentHostFs: getCurrentHostFs,
+    emitProgress: emitProgress,
+    notifyStatus: notifyStatus,
+    clamp16: clamp16,
+    toArrayBuffer: toArrayBuffer,
+    toUint8Array: toUint8Array,
+    createAutomationError: createAutomationError,
+    normalizeResetOptions: normalizeResetOptions,
+    parseCycleDuration: parseCycleDuration,
+    buildXexLaunchSummary: buildXexLaunchSummary,
+    buildXexRunConfiguration: buildXexRunConfiguration,
+    cloneTraceEntries: cloneTraceEntries,
+    cloneXexPreflightReport: cloneXexPreflightReport,
+  });
+
+  buildHelpers = AutomationBuild.createApi({
+    api: api,
+    getCurrentHostFs: getCurrentHostFs,
+    emitEvent: emitEvent,
+    runXex: runXex,
+    clamp16: clamp16,
+    clamp8: clamp8,
+    toUint8Array: toUint8Array,
+    decodeText: decodeText,
+    createAutomationError: createAutomationError,
+    buildAssembleOptions: function (spec, hostFs) {
+      return mediaHelpers.buildAssembleOptions(spec, hostFs);
+    },
+    codeTable: CODE_TABLE,
+  });
+
+  api.system = {
+    start: api.start,
+    pause: api.pause,
+    reset: api.reset,
+    boot: api.boot,
+    saveSnapshot: api.saveSnapshot,
+    loadSnapshot: api.loadSnapshot,
+    reload: api.reload,
+    dispose: api.dispose,
+    waitForPause: api.waitForPause,
+    waitForTime: api.waitForTime,
+    waitForFrames: api.waitForFrames,
+    waitForCycles: api.waitForCycles,
+    getSystemState: api.getSystemState,
+  };
+
+  api.media = {
+    loadRom: api.loadRom,
+    loadOsRom: api.loadOsRom,
+    loadBasicRom: api.loadBasicRom,
+    loadRomFromUrl: api.loadRomFromUrl,
+    loadOsRomFromUrl: api.loadOsRomFromUrl,
+    loadBasicRomFromUrl: api.loadBasicRomFromUrl,
+    mountDisk: api.mountDisk,
+    mountDiskFromUrl: api.mountDiskFromUrl,
+    loadDisk: api.loadDisk,
+    unmountDisk: api.unmountDisk,
+    getMountedMedia: api.getMountedMedia,
+  };
+
+  api.input = {
+    focusDisplay: api.focusDisplay,
+    keyDown: api.keyDown,
+    keyUp: api.keyUp,
+    tapKey: api.tapKey,
+    typeText: api.typeText,
+    setJoystick: api.setJoystick,
+    getConsoleKeyState: api.getConsoleKeyState,
+    setConsoleKeys: api.setConsoleKeys,
+    pressConsoleKey: api.pressConsoleKey,
+    releaseAllInputs: api.releaseAllInputs,
+  };
+
+  api.debug = {
+    setBreakpoints: api.setBreakpoints,
+    stepInstruction: api.stepInstruction,
+    stepOver: api.stepOver,
+    runUntilPc: api.runUntilPc,
+    runUntilPcOrSnapshot: api.runUntilPcOrSnapshot,
+    waitForPc: api.waitForPc,
+    waitForBreakpoint: api.waitForBreakpoint,
+    getDebugState: api.getDebugState,
+    getCounters: api.getCounters,
+    getBankState: api.getBankState,
+    getConsoleKeyState: api.getConsoleKeyState,
+    getTraceTail: api.getTraceTail,
+    readMemory: api.readMemory,
+    readRange: api.readRange,
+    readWord: api.readWord,
+    readWordSigned: api.readWordSigned,
+    writeMemory: api.writeMemory,
+    writeRange: api.writeRange,
+    writeWord: api.writeWord,
+    waitForMemory: api.waitForMemory,
+    getSourceContext: api.getSourceContext,
+    disassemble: api.disassemble,
+    sym: api.sym,
+    peek: api.peek,
+    poke: api.poke,
+  };
+
+  api.dev = {
+    listHostFiles: api.listHostFiles,
+    readHostFile: api.readHostFile,
+    writeHostFile: api.writeHostFile,
+    deleteHostFile: api.deleteHostFile,
+    renameHostFile: api.renameHostFile,
+    lockHostFile: api.lockHostFile,
+    unlockHostFile: api.unlockHostFile,
+    getHostFileStatus: api.getHostFileStatus,
+    waitForHostFsFile: api.waitForHostFsFile,
+    assembleSource: api.assembleSource,
+    assembleHostFile: api.assembleHostFile,
+    getLastBuildResult: api.getLastBuildResult,
+    runXexFromUrl: api.runXexFromUrl,
+    runXex: api.runXex,
+    buildAndRun: api.buildAndRun,
+    sym: api.sym,
+  };
+
+  api.artifacts = {
+    captureScreenshot: api.captureScreenshot,
+    collectArtifacts: api.collectArtifacts,
+    captureFailureState: api.captureFailureState,
+  };
+
+  window.A8EAutomation = api;
+})();

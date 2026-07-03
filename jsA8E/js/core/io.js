@@ -1,0 +1,565 @@
+(function () {
+  "use strict";
+
+  function createApi(cfg) {
+    const CPU = cfg.CPU;
+    const CYCLES_PER_LINE = cfg.CYCLES_PER_LINE;
+    const NMI_DLI = cfg.NMI_DLI;
+    const NMI_VBI = cfg.NMI_VBI;
+    const NMI_RESET = cfg.NMI_RESET;
+    const IO_AUDC1_POT1 = cfg.IO_AUDC1_POT1;
+    const IO_AUDC2_POT3 = cfg.IO_AUDC2_POT3;
+    const IO_AUDC3_POT5 = cfg.IO_AUDC3_POT5;
+    const IO_AUDC4_POT7 = cfg.IO_AUDC4_POT7;
+    const IO_AUDCTL_ALLPOT = cfg.IO_AUDCTL_ALLPOT;
+    const IO_AUDF1_POT0 = cfg.IO_AUDF1_POT0;
+    const IO_AUDF2_POT2 = cfg.IO_AUDF2_POT2;
+    const IO_AUDF3_POT4 = cfg.IO_AUDF3_POT4;
+    const IO_AUDF4_POT6 = cfg.IO_AUDF4_POT6;
+    const IO_CHACTL = cfg.IO_CHACTL;
+    const IO_CHBASE = cfg.IO_CHBASE;
+    const IO_COLBK = cfg.IO_COLBK;
+    const IO_COLPF0 = cfg.IO_COLPF0;
+    const IO_COLPF1 = cfg.IO_COLPF1;
+    const IO_COLPF2 = cfg.IO_COLPF2;
+    const IO_COLPF3 = cfg.IO_COLPF3;
+    const IO_COLPM0_TRIG2 = cfg.IO_COLPM0_TRIG2;
+    const IO_COLPM1_TRIG3 = cfg.IO_COLPM1_TRIG3;
+    const IO_COLPM2_PAL = cfg.IO_COLPM2_PAL;
+    const IO_COLPM3 = cfg.IO_COLPM3;
+    const IO_CONSOL = cfg.IO_CONSOL;
+    const IO_DLISTH = cfg.IO_DLISTH;
+    const IO_DLISTL = cfg.IO_DLISTL;
+    const IO_DMACTL = cfg.IO_DMACTL;
+    const IO_GRACTL = cfg.IO_GRACTL;
+    const IO_GRAFM_TRIG1 = cfg.IO_GRAFM_TRIG1;
+    const IO_GRAFP0_P1PL = cfg.IO_GRAFP0_P1PL;
+    const IO_GRAFP1_P2PL = cfg.IO_GRAFP1_P2PL;
+    const IO_GRAFP2_P3PL = cfg.IO_GRAFP2_P3PL;
+    const IO_GRAFP3_TRIG0 = cfg.IO_GRAFP3_TRIG0;
+    const IO_HITCLR = cfg.IO_HITCLR;
+    const IO_HPOSM0_P0PF = cfg.IO_HPOSM0_P0PF;
+    const IO_HPOSM1_P1PF = cfg.IO_HPOSM1_P1PF;
+    const IO_HPOSM2_P2PF = cfg.IO_HPOSM2_P2PF;
+    const IO_HPOSM3_P3PF = cfg.IO_HPOSM3_P3PF;
+    const IO_HPOSP0_M0PF = cfg.IO_HPOSP0_M0PF;
+    const IO_HPOSP1_M1PF = cfg.IO_HPOSP1_M1PF;
+    const IO_HPOSP2_M2PF = cfg.IO_HPOSP2_M2PF;
+    const IO_HPOSP3_M3PF = cfg.IO_HPOSP3_M3PF;
+    const IO_HSCROL = cfg.IO_HSCROL;
+    const IO_IRQEN_IRQST = cfg.IO_IRQEN_IRQST;
+    const IO_NMIEN = cfg.IO_NMIEN;
+    const IO_NMIRES_NMIST = cfg.IO_NMIRES_NMIST;
+    const IO_PACTL = cfg.IO_PACTL;
+    const IO_PBCTL = cfg.IO_PBCTL;
+    const IO_PENH = cfg.IO_PENH;
+    const IO_PENV = cfg.IO_PENV;
+    const IO_PMBASE = cfg.IO_PMBASE;
+    const IO_PORTA = cfg.IO_PORTA;
+    const IO_PORTB = cfg.IO_PORTB;
+    const IO_POTGO = cfg.IO_POTGO;
+    const IO_PRIOR = cfg.IO_PRIOR;
+    const IO_SEROUT_SERIN = cfg.IO_SEROUT_SERIN;
+    const IO_SIZEM_P0PL = cfg.IO_SIZEM_P0PL;
+    const IO_SIZEP0_M0PL = cfg.IO_SIZEP0_M0PL;
+    const IO_SIZEP1_M1PL = cfg.IO_SIZEP1_M1PL;
+    const IO_SIZEP2_M2PL = cfg.IO_SIZEP2_M2PL;
+    const IO_SIZEP3_M3PL = cfg.IO_SIZEP3_M3PL;
+    const IO_SKCTL_SKSTAT = cfg.IO_SKCTL_SKSTAT;
+    const IO_SKREST_RANDOM = cfg.IO_SKREST_RANDOM;
+    const IO_STIMER_KBCODE = cfg.IO_STIMER_KBCODE;
+    const IO_VCOUNT = cfg.IO_VCOUNT;
+    const IO_VDELAY = cfg.IO_VDELAY;
+    const IO_VSCROL = cfg.IO_VSCROL;
+    const IO_WSYNC = cfg.IO_WSYNC;
+    const pokeyAudioSync = cfg.pokeyAudioSync;
+    const pokeyAudioOnRegisterWrite = cfg.pokeyAudioOnRegisterWrite;
+    const pokeyPotPrepareSkctlWrite = cfg.pokeyPotPrepareSkctlWrite;
+    const pokeyPotStartScan = cfg.pokeyPotStartScan;
+    const pokeyRestartTimers = cfg.pokeyRestartTimers;
+    const pokeySyncLfsr17 = cfg.pokeySyncLfsr17;
+    const pokeySeroutWrite = cfg.pokeySeroutWrite;
+    const pokeySerinRead = cfg.pokeySerinRead;
+    const pokeyPotUpdate = cfg.pokeyPotUpdate;
+    const TRIG_REGS = [
+      IO_GRAFP3_TRIG0,
+      IO_GRAFM_TRIG1,
+      IO_COLPM0_TRIG2,
+      IO_COLPM1_TRIG3,
+    ];
+
+    function piaPortBWrite(ctx, value) {
+      const io = ctx.ioData;
+      const ram = ctx.ram;
+      const sram = ctx.sram;
+      const oldV = sram[IO_PORTB] & 0xff;
+      const v = ((value & 0x83) | 0x7c) & 0xff;
+
+      function traceCopy(startAddr, source) {
+        if (!ctx || typeof ctx.memoryWriteHook !== "function") return;
+        const bytes = source instanceof Uint8Array ? source : new Uint8Array(source || 0);
+        for (let i = 0; i < bytes.length; i++) {
+          const addr = (startAddr + i) & 0xffff;
+          try {
+            ctx.memoryWriteHook(
+              addr,
+              bytes[i] & 0xff,
+              ctx.cycleCounter >>> 0,
+              ctx.instructionCounter >>> 0,
+              ctx.currentInstructionPc & 0xffff,
+              ctx.currentOpcode & 0xff,
+              ctx,
+            );
+          } catch {
+            // ignore hook errors
+          }
+        }
+      }
+
+      // Bit 0: OS ROM enable (1=ROM, 0=RAM)
+      if ((oldV & 0x01) !== (v & 0x01)) {
+        if (v & 0x01) {
+          // Enable OS ROM at $C000-$CFFF and FP ROM at $D800-$FFFF.
+          const osRamShadow = ram.subarray(0xc000, 0xd000);
+          sram.set(osRamShadow, 0xc000);
+          traceCopy(0xc000, osRamShadow);
+          CPU.setRom(ctx, 0xc000, 0xcfff);
+          if (io.osRom) {
+            ram.set(io.osRom, 0xc000);
+            traceCopy(0xc000, io.osRom);
+          }
+
+          const fpRamShadow = ram.subarray(0xd800, 0x10000);
+          sram.set(fpRamShadow, 0xd800);
+          traceCopy(0xd800, fpRamShadow);
+          CPU.setRom(ctx, 0xd800, 0xffff);
+          if (io.floatingPointRom) {
+            ram.set(io.floatingPointRom, 0xd800);
+            traceCopy(0xd800, io.floatingPointRom);
+          }
+        } else {
+          // Disable OS ROM.
+          const osRamVisible = sram.subarray(0xc000, 0xd000);
+          ram.set(osRamVisible, 0xc000);
+          traceCopy(0xc000, osRamVisible);
+          CPU.setRam(ctx, 0xc000, 0xcfff);
+
+          const fpRamVisible = sram.subarray(0xd800, 0x10000);
+          ram.set(fpRamVisible, 0xd800);
+          traceCopy(0xd800, fpRamVisible);
+          CPU.setRam(ctx, 0xd800, 0xffff);
+        }
+      }
+
+      // Bit 1: BASIC ROM disable (1=disabled -> RAM, 0=enabled -> ROM)
+      if ((oldV & 0x02) !== (v & 0x02)) {
+        if (v & 0x02) {
+          const basicRamVisible = sram.subarray(0xa000, 0xc000);
+          ram.set(basicRamVisible, 0xa000);
+          traceCopy(0xa000, basicRamVisible);
+          CPU.setRam(ctx, 0xa000, 0xbfff);
+        } else {
+          const basicRamShadow = ram.subarray(0xa000, 0xc000);
+          sram.set(basicRamShadow, 0xa000);
+          traceCopy(0xa000, basicRamShadow);
+          CPU.setRom(ctx, 0xa000, 0xbfff);
+          if (io.basicRom) {
+            ram.set(io.basicRom, 0xa000);
+            traceCopy(0xa000, io.basicRom);
+          }
+        }
+      }
+
+      // Bit 7: Self-test ROM disable (1=disabled -> RAM, 0=enabled -> ROM)
+      if ((oldV & 0x80) !== (v & 0x80)) {
+        if (v & 0x80) {
+          const selfTestRamVisible = sram.subarray(0x5000, 0x5800);
+          ram.set(selfTestRamVisible, 0x5000);
+          traceCopy(0x5000, selfTestRamVisible);
+          CPU.setRam(ctx, 0x5000, 0x57ff);
+        } else {
+          const selfTestRamShadow = ram.subarray(0x5000, 0x5800);
+          sram.set(selfTestRamShadow, 0x5000);
+          traceCopy(0x5000, selfTestRamShadow);
+          CPU.setRom(ctx, 0x5000, 0x57ff);
+          if (io.selfTestRom) {
+            ram.set(io.selfTestRom, 0x5000);
+            traceCopy(0x5000, io.selfTestRom);
+          }
+        }
+      }
+
+      ram[IO_PORTB] = v;
+      sram[IO_PORTB] = v;
+    }
+
+    function syncTriggerReadback(ctx, initializeLatch) {
+      const io = ctx.ioData;
+      const ram = ctx.ram;
+      const sram = ctx.sram;
+      if (!io.trigPhysical || !io.trigLatched) return;
+
+      const latchEnabled = (sram[IO_GRACTL] & 0x04) !== 0;
+      for (let i = 0; i < TRIG_REGS.length; i++) {
+        const physical = io.trigPhysical[i] & 0x01;
+        if (!latchEnabled || initializeLatch) io.trigLatched[i] = physical;
+        ram[TRIG_REGS[i]] = latchEnabled
+          ? io.trigLatched[i] & 0x01
+          : physical;
+      }
+    }
+
+    function ioAccess(ctx, value) {
+      const addr = ctx.accessAddress & 0xffff;
+      const ram = ctx.ram;
+      const sram = ctx.sram;
+      const io = ctx.ioData;
+
+      if (value != null) {
+        const v = value & 0xff;
+
+        switch (addr) {
+          // --- GTIA ---
+          case IO_HPOSP0_M0PF:
+          case IO_HPOSP1_M1PF:
+          case IO_HPOSP2_M2PF:
+          case IO_HPOSP3_M3PF:
+          case IO_HPOSM0_P0PF:
+          case IO_HPOSM1_P1PF:
+          case IO_HPOSM2_P2PF:
+          case IO_HPOSM3_P3PF:
+          case IO_SIZEP0_M0PL:
+          case IO_SIZEP1_M1PL:
+          case IO_SIZEP2_M2PL:
+          case IO_SIZEP3_M3PL:
+          case IO_SIZEM_P0PL:
+          case IO_GRAFP0_P1PL:
+          case IO_GRAFP1_P2PL:
+          case IO_GRAFP2_P3PL:
+          case IO_GRAFP3_TRIG0:
+          case IO_GRAFM_TRIG1:
+          case IO_PRIOR:
+          case IO_VDELAY:
+            sram[addr] = v;
+            break;
+
+          case IO_GRACTL: {
+            const oldV = sram[addr] & 0xff;
+            const newV = v & 0x07;
+            sram[addr] = newV;
+            const oldLatch = (oldV & 0x04) !== 0;
+            const newLatch = (newV & 0x04) !== 0;
+            if (!newLatch || (newLatch && !oldLatch))
+              {syncTriggerReadback(ctx, true);}
+            break;
+          }
+
+          case IO_COLPM0_TRIG2:
+          case IO_COLPM1_TRIG3:
+          case IO_COLPM2_PAL:
+          case IO_COLPM3:
+          case IO_COLPF0:
+          case IO_COLPF1:
+          case IO_COLPF2:
+          case IO_COLPF3:
+          case IO_COLBK:
+            sram[addr] = v & 0xfe;
+            break;
+
+          case IO_HITCLR:
+            // Clear collision registers (HITCLR) on the read side.
+            ram[IO_HPOSP0_M0PF] = 0x00;
+            ram[IO_HPOSP1_M1PF] = 0x00;
+            ram[IO_HPOSP2_M2PF] = 0x00;
+            ram[IO_HPOSP3_M3PF] = 0x00;
+            ram[IO_HPOSM0_P0PF] = 0x00;
+            ram[IO_HPOSM1_P1PF] = 0x00;
+            ram[IO_HPOSM2_P2PF] = 0x00;
+            ram[IO_HPOSM3_P3PF] = 0x00;
+            ram[IO_SIZEP0_M0PL] = 0x00;
+            ram[IO_SIZEP1_M1PL] = 0x00;
+            ram[IO_SIZEP2_M2PL] = 0x00;
+            ram[IO_SIZEP3_M3PL] = 0x00;
+            ram[IO_SIZEM_P0PL] = 0x00;
+            ram[IO_GRAFP0_P1PL] = 0x00;
+            ram[IO_GRAFP1_P2PL] = 0x00;
+            ram[IO_GRAFP2_P3PL] = 0x00;
+            sram[addr] = v;
+            break;
+
+          case IO_CONSOL:
+            // Only speaker bit is writable; key bits are read-only.
+            sram[addr] = v & 0x08;
+            break;
+
+          // --- POKEY ---
+          case IO_AUDF1_POT0:
+          case IO_AUDC1_POT1:
+          case IO_AUDF2_POT2:
+          case IO_AUDC2_POT3:
+          case IO_AUDF3_POT4:
+          case IO_AUDC3_POT5:
+          case IO_AUDF4_POT6:
+          case IO_AUDC4_POT7:
+          case IO_AUDCTL_ALLPOT:
+            if (io.pokeyAudio)
+              {pokeyAudioSync(ctx, io.pokeyAudio, ctx.cycleCounter);}
+            sram[addr] = v;
+            if (io.pokeyAudio)
+              {pokeyAudioOnRegisterWrite(io.pokeyAudio, addr, v);}
+            break;
+
+          case IO_POTGO:
+            sram[addr] = v;
+            pokeyPotStartScan(ctx);
+            break;
+
+          case IO_STIMER_KBCODE:
+            if (io.pokeyAudio)
+              {pokeyAudioSync(ctx, io.pokeyAudio, ctx.cycleCounter);}
+            sram[addr] = v;
+            if (io.pokeyAudio)
+              {pokeyAudioOnRegisterWrite(io.pokeyAudio, addr, v);}
+            pokeyRestartTimers(ctx);
+            break;
+
+          case IO_SKREST_RANDOM:
+            pokeySyncLfsr17(ctx);
+            sram[addr] = v;
+            break;
+
+          case IO_SEROUT_SERIN:
+            sram[addr] = v;
+            // On real POKEY, writing SEROUT fills the output shift register:
+            // bit 3 (XMTDON) → 1: transmission now in progress
+            // bit 4 (output data needed) → 1: buffer now full
+            ram[IO_IRQEN_IRQST] |= 0x18;
+            pokeySeroutWrite(ctx, v);
+            break;
+
+          case IO_IRQEN_IRQST:
+            sram[addr] = v;
+            // IRQST bits read as 1 for disabled sources.
+            ram[addr] |= ~v & 0xff;
+            break;
+
+          case IO_SKCTL_SKSTAT:
+            pokeySyncLfsr17(ctx);
+            pokeyPotPrepareSkctlWrite(ctx);
+            sram[addr] = v;
+            if (io.pokeyAudio)
+              {pokeyAudioOnRegisterWrite(io.pokeyAudio, addr, v);}
+            // Writing SKCTL with serial mode off (bits 0-1 = 0) resets the
+            // serial port.  Clear the high-level SIO state machine so a
+            // subsequent command frame starts cleanly.
+            if ((v & 0x03) === 0) {
+              io.sioOutIndex = 0;
+              io.sioOutPhase = 0;
+              io.sioDataIndex = 0;
+              io.sioInSize = 0;
+              io.sioInIndex = 0;
+            }
+            break;
+
+          // --- PIA ---
+          case IO_PORTA:
+            if ((sram[IO_PACTL] & 0x04) === 0) {
+              io.valuePortA = v;
+              return io.valuePortA & 0xff;
+            }
+            sram[addr] = v;
+            break;
+
+          case IO_PORTB:
+            if ((sram[IO_PBCTL] & 0x04) === 0) {
+              io.valuePortB = v;
+              return io.valuePortB & 0xff;
+            }
+            piaPortBWrite(ctx, v);
+            break;
+
+          case IO_PACTL:
+            sram[addr] = v;
+            ram[addr] = (v & 0x0d) | 0x30;
+            break;
+
+          case IO_PBCTL:
+            sram[addr] = v;
+            ram[addr] = (v & 0x0d) | 0x30;
+            break;
+
+          // --- ANTIC ---
+          case IO_DMACTL:
+            sram[addr] = v & 0x3f;
+            break;
+
+          case IO_CHACTL:
+          case IO_PMBASE:
+            sram[addr] = v;
+            break;
+
+          case IO_CHBASE: {
+            sram[addr] = v;
+            const chbaseTiming = io.chbaseTiming;
+            chbaseTiming.initialized = true;
+            chbaseTiming.rawValue = v & 0xff;
+            chbaseTiming.pendingValue = v & 0xff;
+            // AHRM 4.4: CHBASE change takes effect 2 color clocks after
+            // the register write.  The 6502 bus write occurs on the last
+            // cycle of the instruction, so offset by (instructionCycles − 1)
+            // to place the latch relative to the actual write cycle.
+            const writeCycleOffset =
+              Math.max((ctx.currentInstructionCycles | 0) - 1, 0);
+            chbaseTiming.pendingClock =
+              (io.clock | 0) + writeCycleOffset + 2;
+            break;
+          }
+
+          case IO_DLISTL:
+            sram[addr] = v;
+            io.displayListAddress = (io.displayListAddress & 0xff00) | v;
+            break;
+
+          case IO_DLISTH:
+            sram[addr] = v;
+            io.displayListAddress = (io.displayListAddress & 0x00ff) | (v << 8);
+            break;
+
+          case IO_HSCROL:
+          case IO_VSCROL:
+            sram[addr] = v & 0x0f;
+            break;
+
+          case IO_WSYNC: {
+            // Stall until cycle 105 of the current scanline (0-indexed: cycle 104).
+            // AHRM 4.9: A write to WSYNC halts CPU execution until cycle 105 on the current line.
+            const WSYNC_CYCLE = 105;
+            const WSYNC_BOUNDARY = WSYNC_CYCLE - 1; // 104: if past this, wait for next line
+            let lineStart = io.displayListFetchCycle;
+            if (
+              lineStart > ctx.cycleCounter ||
+              ctx.cycleCounter >= lineStart + CYCLES_PER_LINE
+            ) {
+              lineStart =
+                ((ctx.cycleCounter / CYCLES_PER_LINE) | 0) * CYCLES_PER_LINE;
+            }
+            const target = lineStart + WSYNC_CYCLE;
+
+            // If we are already at or past cycle 104, wait for the next line's cycle 105.
+            if (ctx.cycleCounter >= lineStart + WSYNC_BOUNDARY) {
+              ctx.stallCycleCounter = Math.max(
+                ctx.stallCycleCounter,
+                target + CYCLES_PER_LINE,
+              );
+            } else {
+              ctx.stallCycleCounter = Math.max(ctx.stallCycleCounter, target);
+            }
+            break;
+          }
+
+          case IO_NMIEN:
+            // Only bits 7-5 are used (DLI/VBI/RESET).
+            sram[addr] = v & (NMI_DLI | NMI_VBI | NMI_RESET);
+            if (io.inDrawLine) {
+              const nmiTiming = io.nmiTiming;
+              const lineCycle = (io.clock - io.displayListFetchCycle) | 0;
+              if (lineCycle >= 0 && lineCycle < CYCLES_PER_LINE) {
+                if (lineCycle < 7) {
+                  nmiTiming.enabledByCycle7 = sram[addr] & 0xff;
+                  nmiTiming.enabledByCycle8 = sram[addr] & 0xff;
+                  nmiTiming.enabledOnCycle7Mask = 0;
+                } else if (lineCycle === 7) {
+                  nmiTiming.enabledOnCycle7Mask =
+                    ((~nmiTiming.enabledByCycle7) & sram[addr]) &
+                    (NMI_DLI | NMI_VBI | NMI_RESET);
+                  nmiTiming.enabledByCycle7 = sram[addr] & 0xff;
+                  nmiTiming.enabledByCycle8 = sram[addr] & 0xff;
+                } else if (lineCycle === 8) {
+                  nmiTiming.enabledByCycle8 = sram[addr] & 0xff;
+                }
+              }
+            }
+            break;
+
+          case IO_NMIRES_NMIST:
+            // Writing clears pending NMI status bits.
+            ram[addr] = 0x00;
+            break;
+
+          case IO_VCOUNT:
+          case IO_PENH:
+          case IO_PENV:
+            // Read-only in this emulator.
+            break;
+
+          default:
+            // Default for mapped I/O addresses: write-only shadow.
+            sram[addr] = v;
+            break;
+        }
+
+        return ram[addr] & 0xff;
+      }
+
+      // Reads
+      switch (addr) {
+        case IO_PORTA:
+          if ((sram[IO_PACTL] & 0x04) === 0) return io.valuePortA & 0xff;
+          return ram[addr] & 0xff;
+
+        case IO_PORTB:
+          if ((sram[IO_PBCTL] & 0x04) === 0) return io.valuePortB & 0xff;
+          return ram[addr] & 0xff;
+
+        case IO_CONSOL:
+          // Shim from the C/SDL version (CONSOL_HACK):
+          // OS ROM reads CONSOL at $C49A (PC will be $C49D during the read) to
+          // decide whether to disable BASIC. Optionally force OPTION held there.
+          if (io.optionOnStart && (ctx.cpu.pc & 0xffff) === 0xc49d) return 0x03;
+          return ram[addr] & 0xff;
+
+        case IO_STIMER_KBCODE:
+          // KBCODE is stored in RAM at this address by keyboard events.
+          return ram[addr] & 0xff;
+
+        case IO_SKREST_RANDOM:
+          pokeySyncLfsr17(ctx);
+          ram[addr] = io.pokeyLfsr17 & 0xff;
+          return ram[addr] & 0xff;
+
+        case IO_SEROUT_SERIN:
+          // On real POKEY, reading SERIN acknowledges the data-ready condition:
+          // bit 5 (serial input data ready) → 1: byte consumed, not ready
+          ram[IO_IRQEN_IRQST] |= 0x20;
+          return pokeySerinRead(ctx);
+
+        case IO_AUDF1_POT0:
+        case IO_AUDC1_POT1:
+        case IO_AUDF2_POT2:
+        case IO_AUDC2_POT3:
+        case IO_AUDF3_POT4:
+        case IO_AUDC3_POT5:
+        case IO_AUDF4_POT6:
+        case IO_AUDC4_POT7:
+        case IO_AUDCTL_ALLPOT:
+          pokeyPotUpdate(ctx);
+          return ram[addr] & 0xff;
+
+        case IO_SKCTL_SKSTAT:
+          pokeySyncLfsr17(ctx);
+          return ram[addr] & 0xff;
+
+        default:
+          return ram[addr] & 0xff;
+      }
+    }
+
+    return {
+      ioAccess: ioAccess,
+    };
+  }
+
+  window.A8EIo = {
+    createApi: createApi,
+  };
+})();

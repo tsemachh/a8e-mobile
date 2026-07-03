@@ -1,0 +1,1577 @@
+(function () {
+  "use strict";
+
+  const legacyCreate =
+    window.A8EApp && typeof window.A8EApp.create === "function"
+      ? window.A8EApp.create
+      : null;
+  const OBJECT_TO_STRING = Object.prototype.toString;
+  const TYPED_ARRAY_TAGS = new Set([
+    "[object Int8Array]",
+    "[object Uint8Array]",
+    "[object Uint8ClampedArray]",
+    "[object Int16Array]",
+    "[object Uint16Array]",
+    "[object Int32Array]",
+    "[object Uint32Array]",
+    "[object Float32Array]",
+    "[object Float64Array]",
+    "[object BigInt64Array]",
+    "[object BigUint64Array]",
+  ]);
+  const DEFAULT_REQUEST_TIMEOUT_MS = 4000;
+  const REQUEST_TIMEOUT_MS = {
+    start: 4000,
+    pause: 4000,
+    reset: 5000,
+    stepInstruction: 4000,
+    stepOver: 4000,
+    getDebugState: 4000,
+    getCounters: 4000,
+    getTraceTail: 4000,
+    runUntilPc: 30000,
+    loadDiskToDeviceSlot: 15000,
+    readMemory: 4000,
+    readRange: 4000,
+    writeMemory: 4000,
+    writeRange: 4000,
+    getBankState: 4000,
+    getMountedDiskForDeviceSlot: 4000,
+    getConsoleKeyState: 4000,
+    captureScreenshot: 15000,
+    collectArtifacts: 15000,
+    saveSnapshot: 15000,
+    loadSnapshot: 15000,
+  };
+
+  function supportsWorker() {
+    if (typeof window.Worker === "undefined") return false;
+    if (typeof window.OffscreenCanvas === "undefined") return false;
+    if (typeof window.MessageChannel === "undefined") return false;
+    if (
+      !window.HTMLCanvasElement ||
+      !window.HTMLCanvasElement.prototype ||
+      typeof window.HTMLCanvasElement.prototype.transferControlToOffscreen !==
+        "function"
+    )
+      {return false;}
+    return true;
+  }
+
+  function parseBooleanLike(value) {
+    if (value === true || value === false) return value;
+    if (value === undefined || value === null) return null;
+    const text = String(value).trim().toLowerCase();
+    if (!text.length) return null;
+    if (
+      text === "1" ||
+      text === "true" ||
+      text === "yes" ||
+      text === "on"
+    ) {
+      return true;
+    }
+    if (
+      text === "0" ||
+      text === "false" ||
+      text === "no" ||
+      text === "off"
+    ) {
+      return false;
+    }
+    return null;
+  }
+
+  function getQueryWorkerPreference() {
+    if (
+      !window.location ||
+      typeof window.location.search !== "string" ||
+      typeof window.URLSearchParams !== "function"
+    ) {
+      return null;
+    }
+    try {
+      const params = new window.URLSearchParams(window.location.search);
+      const noWorker = parseBooleanLike(
+        params.get("a8e_no_worker") || params.get("noWorker"),
+      );
+      if (noWorker === true) return false;
+      const worker = parseBooleanLike(
+        params.get("a8e_worker") || params.get("worker"),
+      );
+      if (worker !== null) return worker;
+    } catch {
+      // ignore malformed URLs
+    }
+    return null;
+  }
+
+  function getBootWorkerPreference() {
+    const boot =
+      window.A8E_BOOT_OPTIONS && typeof window.A8E_BOOT_OPTIONS === "object"
+        ? window.A8E_BOOT_OPTIONS
+        : null;
+    if (!boot) return null;
+    const noWorker = parseBooleanLike(boot.noWorker);
+    if (noWorker === true) return false;
+    return parseBooleanLike(boot.worker);
+  }
+
+  function resolveWorkerPreference(opts) {
+    const directNoWorker =
+      opts && Object.prototype.hasOwnProperty.call(opts, "noWorker")
+        ? parseBooleanLike(opts.noWorker)
+        : null;
+    if (directNoWorker === true) return false;
+    const directWorker =
+      opts && Object.prototype.hasOwnProperty.call(opts, "worker")
+        ? parseBooleanLike(opts.worker)
+        : null;
+    if (directWorker !== null) return directWorker;
+    const bootWorker = getBootWorkerPreference();
+    if (bootWorker !== null) return bootWorker;
+    return getQueryWorkerPreference();
+  }
+
+  function shouldUseWorker(opts) {
+    const preferred = resolveWorkerPreference(opts);
+    if (preferred === false) return false;
+    return supportsWorker();
+  }
+
+  function getObjectTag(value) {
+    return OBJECT_TO_STRING.call(value);
+  }
+
+  function isArrayBufferLike(value) {
+    const tag = getObjectTag(value);
+    return tag === "[object ArrayBuffer]" || tag === "[object SharedArrayBuffer]";
+  }
+
+  function isViewLike(value) {
+    if (!value) return false;
+    if (typeof ArrayBuffer !== "undefined" && typeof ArrayBuffer.isView === "function") {
+      return ArrayBuffer.isView(value);
+    }
+    return getObjectTag(value) === "[object DataView]" || TYPED_ARRAY_TAGS.has(getObjectTag(value));
+  }
+
+  function copyBufferLike(data, byteOffset, byteLength) {
+    if (!isArrayBufferLike(data)) return new Uint8Array(0);
+    const offset = Math.max(0, byteOffset | 0);
+    const length = Math.max(0, byteLength | 0);
+    const source = new Uint8Array(data, offset, length);
+    const out = new Uint8Array(length);
+    out.set(source);
+    return out;
+  }
+
+  function toArrayBuffer(data) {
+    if (!data) return new ArrayBuffer(0);
+    if (isArrayBufferLike(data)) {
+      return copyBufferLike(data, 0, data.byteLength | 0).buffer;
+    }
+    if (isViewLike(data)) {
+      const view = data;
+      return copyBufferLike(
+        view.buffer,
+        view.byteOffset | 0,
+        view.byteLength | 0,
+      ).buffer;
+    }
+    if (Array.isArray(data)) return new Uint8Array(data).buffer;
+    return new ArrayBuffer(0);
+  }
+
+  function toUint8(data) {
+    if (!data) return new Uint8Array(0);
+    if (getObjectTag(data) === "[object Uint8Array]") return new Uint8Array(data);
+    if (isArrayBufferLike(data)) return copyBufferLike(data, 0, data.byteLength | 0);
+    if (isViewLike(data))
+      {return copyBufferLike(data.buffer, data.byteOffset | 0, data.byteLength | 0);}
+    if (Array.isArray(data)) return new Uint8Array(data);
+    return new Uint8Array(0);
+  }
+
+  function createWorkerRequestError(cmd, message, details) {
+    const text = message
+      ? String(message)
+      : 'A8E worker request "' + String(cmd || "unknown") + '" failed';
+    const err = new Error(text);
+    err.name = "A8EWorkerRequestError";
+    err.code =
+      details && details.code ? String(details.code) : "worker_request_failed";
+    if (cmd) err.command = String(cmd);
+    if (details && details.phase) err.phase = String(details.phase);
+    err.details = Object.assign(
+      {
+        command: cmd ? String(cmd) : "unknown",
+      },
+      details && typeof details === "object" ? details : {},
+    );
+    return err;
+  }
+
+  function hydrateWorkerError(raw, cmd) {
+    if (!raw || typeof raw !== "object") {
+      return createWorkerRequestError(
+        cmd,
+        String(raw || "A8E worker request failed"),
+        null,
+      );
+    }
+    const err = createWorkerRequestError(
+      cmd,
+      raw.message ? String(raw.message) : "A8E worker request failed",
+      {
+        code: raw.code,
+        phase: raw.phase,
+      },
+    );
+    if (raw.name) err.name = String(raw.name);
+    if (raw.details !== undefined) {
+      err.details =
+        raw.details && typeof raw.details === "object"
+          ? Object.assign({}, err.details || {}, raw.details)
+          : raw.details;
+    }
+    if (raw.cause !== undefined) err.cause = raw.cause;
+    return err;
+  }
+
+  function normalizeName(raw) {
+    if (!raw) return null;
+    let s = String(raw);
+    const colon = s.indexOf(":");
+    if (colon >= 0) s = s.substring(colon + 1);
+    while (s.length && (s[0] === ">" || s[0] === "/" || s[0] === "\\"))
+      {s = s.substring(1);}
+    s = s.toUpperCase().trim();
+    if (!s.length) return null;
+    const dot = s.indexOf(".");
+    let name;
+    let ext;
+    if (dot >= 0) {
+      name = s.substring(0, dot);
+      ext = s.substring(dot + 1);
+    } else {
+      name = s;
+      ext = "";
+    }
+    if (name.length > 8) name = name.substring(0, 8);
+    if (ext.length > 3) ext = ext.substring(0, 3);
+    return ext.length ? name + "." + ext : name;
+  }
+
+  function matchesWildcard(name, pattern) {
+    if (!pattern || pattern === "*.*" || pattern === "*") return true;
+    const nName = normalizeName(name);
+    const nPat = normalizeName(pattern);
+    if (!nName || !nPat) return false;
+    return wcMatch(nName, nPat);
+  }
+
+  function wcMatch(str, pat) {
+    let si = 0;
+    let pi = 0;
+    let starSi = -1;
+    let starPi = -1;
+    while (si < str.length) {
+      if (pi < pat.length && (pat[pi] === "?" || pat[pi] === str[si])) {
+        si++;
+        pi++;
+      } else if (pi < pat.length && pat[pi] === "*") {
+        starPi = pi;
+        starSi = si;
+        pi++;
+      } else if (starPi >= 0) {
+        pi = starPi + 1;
+        starSi++;
+        si = starSi;
+      } else {
+        return false;
+      }
+    }
+    while (pi < pat.length && pat[pi] === "*") pi++;
+    return pi === pat.length;
+  }
+
+  function createAudioBridge(port) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    let audioCtx = null;
+    let workletNode = null;
+    let nodePromise = null;
+    let scriptNode = null;
+    const scriptQueue = [];
+    let scriptQueueIndex = 0;
+    let scriptLastSample = 0.0;
+    let scriptMaxQueuedSamples = 6144;
+    let scriptStatusBlockCounter = 0;
+    let scriptUnderrunBlocks = 0;
+    let disposed = false;
+    let sampleRateHint = 48000;
+
+    function countScriptQueuedSamples() {
+      if (!scriptQueue.length) return 0;
+      let total = ((scriptQueue[0].length | 0) - (scriptQueueIndex | 0)) | 0;
+      if (total < 0) total = 0;
+      for (let i = 1; i < scriptQueue.length; i++)
+        {total = (total + (scriptQueue[i].length | 0)) | 0;}
+      return total | 0;
+    }
+
+    function clampScriptQueue() {
+      const maxSamples = scriptMaxQueuedSamples | 0;
+      if (!maxSamples || !scriptQueue.length) return;
+      const total = countScriptQueuedSamples();
+      if (total <= maxSamples) return;
+      let toDrop = (total - maxSamples) | 0;
+      while (scriptQueue.length && toDrop > 0) {
+        const head = scriptQueue[0];
+        const start = scriptQueueIndex | 0;
+        const avail = ((head.length | 0) - start) | 0;
+        if (avail <= 0) {
+          scriptQueue.shift();
+          scriptQueueIndex = 0;
+          continue;
+        }
+        if (avail <= toDrop) {
+          scriptQueue.shift();
+          scriptQueueIndex = 0;
+          toDrop -= avail;
+          continue;
+        }
+        scriptQueueIndex = (start + toDrop) | 0;
+        toDrop = 0;
+      }
+      if (!scriptQueue.length) scriptQueueIndex = 0;
+    }
+
+    function clearScriptQueue() {
+      scriptQueue.length = 0;
+      scriptQueueIndex = 0;
+      scriptLastSample = 0.0;
+      scriptStatusBlockCounter = 0;
+      scriptUnderrunBlocks = 0;
+    }
+
+    function postStatusToWorker(queuedSamples) {
+      try {
+        port.postMessage({
+          type: "status",
+          msg: {
+            type: "status",
+            queuedSamples: queuedSamples | 0,
+            underrunBlocks: scriptUnderrunBlocks | 0,
+          },
+        });
+      } catch {
+        // ignore
+      }
+    }
+
+    function setupScriptNode() {
+      if (scriptNode || disposed) return;
+      const ctx = ensureContext();
+      if (!ctx || typeof ctx.createScriptProcessor !== "function") return;
+      const n = ctx.createScriptProcessor(512, 0, 1);
+      n.onaudioprocess = function (e) {
+        const out = e.outputBuffer.getChannelData(0);
+        let i = 0;
+        let underrun = false;
+        while (i < out.length) {
+          if (!scriptQueue.length) {
+            out[i++] = scriptLastSample;
+            underrun = true;
+            continue;
+          }
+          const buf = scriptQueue[0];
+          if (!buf || typeof buf.length !== "number") {
+            scriptQueue.shift();
+            scriptQueueIndex = 0;
+            continue;
+          }
+          const avail = ((buf.length | 0) - (scriptQueueIndex | 0)) | 0;
+          if (avail <= 0) {
+            scriptQueue.shift();
+            scriptQueueIndex = 0;
+            continue;
+          }
+          let toCopy = out.length - i;
+          if (toCopy > avail) toCopy = avail;
+          const start = scriptQueueIndex | 0;
+          const end = (start + toCopy) | 0;
+          out.set(buf.subarray(start, end), i);
+          i += toCopy;
+          scriptQueueIndex = end;
+          if ((scriptQueueIndex | 0) >= (buf.length | 0)) {
+            scriptQueue.shift();
+            scriptQueueIndex = 0;
+          }
+        }
+
+        if (underrun) scriptUnderrunBlocks = (scriptUnderrunBlocks + 1) | 0;
+        scriptStatusBlockCounter = (scriptStatusBlockCounter + 1) | 0;
+        if (underrun || scriptStatusBlockCounter >= 8) {
+          scriptStatusBlockCounter = 0;
+          postStatusToWorker(countScriptQueuedSamples());
+        }
+        scriptLastSample = out[out.length - 1] || 0.0;
+      };
+      n.connect(ctx.destination);
+      scriptNode = n;
+    }
+
+    function pushScriptSamples(samples) {
+      if (!samples || !samples.length) return;
+      let chunk = samples;
+      if (getObjectTag(chunk) !== "[object Float32Array]") {
+        if (ArrayBuffer.isView(chunk) && chunk.buffer) {
+          chunk = new Float32Array(
+            chunk.buffer,
+            chunk.byteOffset | 0,
+            chunk.length | 0,
+          );
+        } else if (Array.isArray(chunk)) {
+          chunk = new Float32Array(chunk);
+        } else {
+          return;
+        }
+      }
+      scriptQueue.push(chunk);
+      clampScriptQueue();
+    }
+
+    function relayToScriptFallback(msg) {
+      const ctx = ensureContext();
+      if (!ctx) return;
+      setupScriptNode();
+      if (!msg || !msg.type) return;
+      if (msg.type === "config") {
+        let maxQueued = msg.maxQueuedSamples | 0;
+        if (maxQueued > 0) {
+          if (maxQueued < 256) maxQueued = 256;
+          scriptMaxQueuedSamples = maxQueued;
+          clampScriptQueue();
+          postStatusToWorker(countScriptQueuedSamples());
+        }
+        return;
+      }
+      if (msg.type === "clear") {
+        clearScriptQueue();
+        postStatusToWorker(0);
+        return;
+      }
+      if (msg.type === "samples" && msg.samples && msg.samples.length) {
+        pushScriptSamples(msg.samples);
+      }
+    }
+
+    function ensureContext() {
+      if (!AC || disposed) return null;
+      if (!audioCtx) {
+        audioCtx = new AC();
+        sampleRateHint = audioCtx.sampleRate || 48000;
+      }
+      return audioCtx;
+    }
+
+    function ensureNode() {
+      if (disposed) return Promise.resolve(null);
+      if (workletNode) return Promise.resolve(workletNode);
+      if (nodePromise) return nodePromise;
+      const ctx = ensureContext();
+      if (!ctx) return Promise.resolve(null);
+      if (!(ctx.audioWorklet && window.AudioWorkletNode)) {
+        setupScriptNode();
+        nodePromise = Promise.resolve(null);
+        return nodePromise;
+      }
+      nodePromise = ctx.audioWorklet
+        .addModule("js/audio/worklet.js")
+        .then(function () {
+          if (disposed) return null;
+          if (workletNode) return workletNode;
+          const n = new window.AudioWorkletNode(ctx, "a8e-sample-queue", {
+            numberOfInputs: 0,
+            numberOfOutputs: 1,
+            outputChannelCount: [1],
+          });
+          n.port.onmessage = function (e) {
+            try {
+              port.postMessage({ type: "status", msg: e.data || null });
+            } catch {
+              // ignore
+            }
+          };
+          n.connect(ctx.destination);
+          workletNode = n;
+          return n;
+        })
+        .catch(function () {
+          setupScriptNode();
+          nodePromise = Promise.resolve(null);
+          return null;
+        });
+      return nodePromise;
+    }
+
+    function relayWorkletMessage(msg) {
+      ensureNode().then(function (n) {
+        if (!msg) return;
+        if (!n) {
+          relayToScriptFallback(msg);
+          return;
+        }
+        try {
+          if (
+            msg.type === "samples" &&
+            msg.samples &&
+            isArrayBufferLike(msg.samples.buffer)
+          ) {
+            n.port.postMessage(msg, [msg.samples.buffer]);
+            return;
+          }
+          n.port.postMessage(msg);
+        } catch {
+          // ignore malformed payloads
+        }
+      });
+    }
+
+    function resumeFromGesture() {
+      const ctx = ensureContext();
+      if (!ctx) return;
+      ensureNode().then(function (n) {
+        if (!n) setupScriptNode();
+        if (!ctx || typeof ctx.resume !== "function") return;
+        ctx.resume().catch(function () {});
+      });
+    }
+
+    function closeContext() {
+      try {
+        if (workletNode) workletNode.disconnect();
+      } catch {
+        // ignore
+      }
+      workletNode = null;
+      try {
+        if (scriptNode) scriptNode.disconnect();
+      } catch {
+        // ignore
+      }
+      scriptNode = null;
+      clearScriptQueue();
+      nodePromise = null;
+      if (audioCtx && typeof audioCtx.close === "function") {
+        try {
+          audioCtx.close();
+        } catch {
+          // ignore
+        }
+      }
+      audioCtx = null;
+    }
+
+    function dispose() {
+      disposed = true;
+      closeContext();
+    }
+
+    port.onmessage = function (e) {
+      if (disposed) return;
+      const data = e && e.data ? e.data : null;
+      if (!data) return;
+      if (data.type === "worklet") {
+        relayWorkletMessage(data.msg || null);
+        return;
+      }
+      if (data.type === "context" && data.op === "resume") {
+        const ctx = ensureContext();
+        if (ctx && typeof ctx.resume === "function")
+          {ctx.resume().catch(function () {});}
+        return;
+      }
+      if (data.type === "context" && data.op === "close") {
+        closeContext();
+      }
+    };
+    if (typeof port.start === "function") {
+      try {
+        port.start();
+      } catch {
+        // ignore
+      }
+    }
+
+    ensureContext();
+
+    return {
+      getSampleRateHint: function () {
+        return sampleRateHint | 0;
+      },
+      resumeFromGesture: resumeFromGesture,
+      dispose: dispose,
+    };
+  }
+
+  function createHostFsProxy(sendHostFsCommand) {
+    const files = new Map();
+    const listeners = new Set();
+
+    function emitChange() {
+      listeners.forEach(function (fn) {
+        try {
+          fn();
+        } catch {
+          // ignore listener errors
+        }
+      });
+    }
+
+    function snapshotFromWire(items) {
+      files.clear();
+      if (items && items.length) {
+        for (let i = 0; i < items.length; i++) {
+          const it = items[i] || null;
+          if (!it || !it.name) continue;
+          const key = normalizeName(it.name);
+          if (!key) continue;
+          const data = toUint8(it.data);
+          files.set(key, {
+            name: key,
+            locked: !!it.locked,
+            data: data,
+            size: data.length | 0,
+          });
+        }
+      }
+      emitChange();
+    }
+
+    function listFiles(pattern) {
+      const out = [];
+      files.forEach(function (entry) {
+        if (!pattern || matchesWildcard(entry.name, pattern)) {
+          out.push({
+            name: entry.name,
+            size: entry.size | 0,
+            locked: !!entry.locked,
+          });
+        }
+      });
+      out.sort(function (a, b) {
+        return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+      });
+      return out;
+    }
+
+    function readFile(rawName) {
+      const key = normalizeName(rawName);
+      if (!key) return null;
+      const entry = files.get(key);
+      if (!entry) return null;
+      return new Uint8Array(entry.data);
+    }
+
+    function writeFile(rawName, data) {
+      const key = normalizeName(rawName);
+      if (!key) return false;
+      const existing = files.get(key);
+      if (existing && existing.locked) return false;
+      const localCopy = toUint8(data);
+      files.set(key, {
+        name: key,
+        locked: existing ? !!existing.locked : false,
+        data: localCopy,
+        size: localCopy.length | 0,
+      });
+      emitChange();
+      const sendCopy = new Uint8Array(localCopy);
+      sendHostFsCommand(
+        "hostfsWrite",
+        { name: key, data: sendCopy },
+        [sendCopy.buffer],
+      );
+      return true;
+    }
+
+    function deleteFile(rawName) {
+      const key = normalizeName(rawName);
+      if (!key) return false;
+      const existing = files.get(key);
+      if (!existing || existing.locked) return false;
+      files.delete(key);
+      emitChange();
+      sendHostFsCommand("hostfsDelete", { name: key });
+      return true;
+    }
+
+    function renameFile(rawOld, rawNew) {
+      const oldKey = normalizeName(rawOld);
+      const newKey = normalizeName(rawNew);
+      if (!oldKey || !newKey) return false;
+      const existing = files.get(oldKey);
+      if (!existing) return false;
+      if (existing.locked) return false;
+      if (files.has(newKey)) return false;
+      files.delete(oldKey);
+      files.set(newKey, {
+        name: newKey,
+        locked: !!existing.locked,
+        data: new Uint8Array(existing.data),
+        size: existing.size | 0,
+      });
+      emitChange();
+      sendHostFsCommand("hostfsRename", { oldName: oldKey, newName: newKey });
+      return true;
+    }
+
+    function lockFile(rawName) {
+      const key = normalizeName(rawName);
+      if (!key) return false;
+      const existing = files.get(key);
+      if (!existing) return false;
+      existing.locked = true;
+      emitChange();
+      sendHostFsCommand("hostfsLock", { name: key });
+      return true;
+    }
+
+    function unlockFile(rawName) {
+      const key = normalizeName(rawName);
+      if (!key) return false;
+      const existing = files.get(key);
+      if (!existing) return false;
+      existing.locked = false;
+      emitChange();
+      sendHostFsCommand("hostfsUnlock", { name: key });
+      return true;
+    }
+
+    function getStatus(rawName) {
+      const key = normalizeName(rawName);
+      if (!key) return null;
+      const entry = files.get(key);
+      if (!entry) return null;
+      return {
+        name: entry.name,
+        size: entry.size | 0,
+        locked: !!entry.locked,
+      };
+    }
+
+    function fileExists(rawName) {
+      const key = normalizeName(rawName);
+      return !!key && files.has(key);
+    }
+
+    function onChange(fn) {
+      if (typeof fn !== "function") return function () {};
+      listeners.add(fn);
+      return function () {
+        listeners.delete(fn);
+      };
+    }
+
+    return {
+      snapshotFromWire: snapshotFromWire,
+      api: {
+        listFiles: listFiles,
+        readFile: readFile,
+        writeFile: writeFile,
+        deleteFile: deleteFile,
+        renameFile: renameFile,
+        lockFile: lockFile,
+        unlockFile: unlockFile,
+        getStatus: getStatus,
+        fileExists: fileExists,
+        onChange: onChange,
+        normalizeName: normalizeName,
+        matchesWildcard: matchesWildcard,
+      },
+    };
+  }
+
+  function createWorkerApp(opts) {
+    const canvas = opts.canvas;
+    const worker = new Worker("emulator_worker.js");
+    const audioChannel = new MessageChannel();
+    const audioBridge = createAudioBridge(audioChannel.port1);
+    const hostFsProxy = createHostFsProxy(sendHostFsCommand);
+    let disposed = false;
+    let ready = false;
+    const pending = [];
+    const pendingRequests = new Map();
+    let requestSeq = 1;
+    const debugListeners = new Set();
+    let keyboardMappingMode =
+      opts && opts.keyboardMappingMode === "original"
+        ? "original"
+        : "translated";
+
+    const state = {
+      running: false,
+      ready: false,
+      hasOsRom: false,
+      hasBasicRom: false,
+      mounted: [false, false, false, false, false, false, false, false],
+      rendererBackend: "unknown",
+      debugState: null,
+      turbo: false,
+      sioTurbo: false,
+      audioEnabled: false,
+      optionOnStart: false,
+    };
+
+    function applyWorkerStateSnapshot(snapshot) {
+      if (!snapshot || typeof snapshot !== "object") return;
+      if (typeof snapshot.running === "boolean") state.running = !!snapshot.running;
+      if (typeof snapshot.hasOsRom === "boolean")
+        {state.hasOsRom = !!snapshot.hasOsRom;}
+      if (typeof snapshot.hasBasicRom === "boolean")
+        {state.hasBasicRom = !!snapshot.hasBasicRom;}
+      if (Array.isArray(snapshot.mounted)) {
+        for (let i = 0; i < state.mounted.length; i++) {
+          state.mounted[i] = !!snapshot.mounted[i];
+        }
+      }
+      if (typeof snapshot.rendererBackend === "string") {
+        state.rendererBackend = snapshot.rendererBackend;
+      }
+      if (snapshot.config && typeof snapshot.config === "object") {
+        if (typeof snapshot.config.turbo === "boolean")
+          {state.turbo = !!snapshot.config.turbo;}
+        if (typeof snapshot.config.sioTurbo === "boolean")
+          {state.sioTurbo = !!snapshot.config.sioTurbo;}
+        if (typeof snapshot.config.audioEnabled === "boolean")
+          {state.audioEnabled = !!snapshot.config.audioEnabled;}
+        if (typeof snapshot.config.optionOnStart === "boolean")
+          {state.optionOnStart = !!snapshot.config.optionOnStart;}
+        if (typeof snapshot.config.keyboardMappingMode === "string")
+          {keyboardMappingMode = snapshot.config.keyboardMappingMode === "original" ? "original" : "translated";}
+      }
+      if (snapshot.debug) emitDebugState(snapshot.debug);
+      syncReadyFlag();
+    }
+
+    function cloneDebugState(raw) {
+      if (!raw || typeof raw !== "object") return null;
+      const out = {
+        reason: raw.reason || "update",
+        running: !!raw.running,
+        pc: (raw.pc | 0) & 0xffff,
+        a: (raw.a | 0) & 0xff,
+        x: (raw.x | 0) & 0xff,
+        y: (raw.y | 0) & 0xff,
+        sp: (raw.sp | 0) & 0xff,
+        p: (raw.p | 0) & 0xff,
+        cycleCounter: raw.cycleCounter >>> 0,
+        instructionCounter: raw.instructionCounter >>> 0,
+        breakpointHit:
+          typeof raw.breakpointHit === "number"
+            ? (raw.breakpointHit | 0) & 0xffff
+            : undefined,
+      };
+      if (typeof raw.stopAddress === "number")
+        {out.stopAddress = (raw.stopAddress | 0) & 0xffff;}
+      if (typeof raw.faultAddress === "number")
+        {out.faultAddress = (raw.faultAddress | 0) & 0xffff;}
+      if (typeof raw.opcode === "number") out.opcode = (raw.opcode | 0) & 0xff;
+      if (raw.faultType) out.faultType = String(raw.faultType);
+      if (raw.faultMessage) out.faultMessage = String(raw.faultMessage);
+      return out;
+    }
+
+    function emitDebugState(raw) {
+      const next = cloneDebugState(raw);
+      if (!next) return;
+      state.debugState = next;
+      state.running = !!next.running;
+      debugListeners.forEach(function (fn) {
+        try {
+          fn(next);
+        } catch {
+          // ignore listener errors
+        }
+      });
+    }
+
+    function syncReadyFlag() {
+      state.ready = !!(state.hasOsRom && state.hasBasicRom);
+    }
+
+    function postRaw(msg, transfer) {
+      if (disposed) return;
+      if (transfer && transfer.length) worker.postMessage(msg, transfer);
+      else worker.postMessage(msg);
+    }
+
+    function getRequestTimeoutMs(cmd, requestOptions) {
+      const explicit =
+        requestOptions &&
+        typeof requestOptions === "object" &&
+        Object.prototype.hasOwnProperty.call(requestOptions, "timeoutMs")
+          ? requestOptions.timeoutMs
+          : null;
+      const parsed = explicit !== null ? explicit | 0 : 0;
+      if (explicit !== null) return parsed > 0 ? parsed : 0;
+      const mapped = REQUEST_TIMEOUT_MS[cmd];
+      return mapped > 0 ? mapped : DEFAULT_REQUEST_TIMEOUT_MS;
+    }
+
+    function clearRequestTimer(entry) {
+      if (!entry || !entry.timeoutId) return;
+      clearTimeout(entry.timeoutId);
+      entry.timeoutId = 0;
+    }
+
+    function startRequestTimer(entry) {
+      if (!entry || entry.timeoutStarted) return;
+      entry.timeoutStarted = true;
+      const timeoutMs = entry.timeoutMs | 0;
+      if (timeoutMs <= 0) return;
+      entry.timeoutId = setTimeout(function () {
+        if (pendingRequests.get(entry.id | 0) !== entry) return;
+        pendingRequests.delete(entry.id | 0);
+        entry.reject(
+          createWorkerRequestError(
+            entry.cmd,
+            'A8E worker request "' +
+              entry.cmd +
+              '" timed out after ' +
+              timeoutMs +
+              "ms",
+            {
+              code: "worker_request_timeout",
+              phase: "worker_request_timeout",
+              timeoutMs: timeoutMs,
+              reason: "timeout",
+            },
+          ),
+        );
+      }, timeoutMs);
+    }
+
+    function queuePendingMessage(msg, transfer) {
+      pending.push({ msg: msg, transfer: transfer || null });
+    }
+
+    function dispatchPendingMessage(entry) {
+      if (!entry || !entry.msg) return;
+      if (entry.msg.type === "req") {
+        const pendingEntry = pendingRequests.get(entry.msg.id | 0) || null;
+        if (!pendingEntry) return;
+        startRequestTimer(pendingEntry);
+      }
+      postRaw(entry.msg, entry.transfer);
+    }
+
+    function sendCommand(cmd, payload, transfer) {
+      if (disposed) return;
+      const msg = {
+        type: "cmd",
+        cmd: cmd,
+        payload: payload || null,
+      };
+      if (!ready) {
+        queuePendingMessage(msg, transfer || null);
+        return;
+      }
+      postRaw(msg, transfer || null);
+    }
+
+    function sendHostFsCommand(cmd, payload, transfer) {
+      sendCommand(cmd, payload, transfer || null);
+    }
+
+    function rejectPendingRequests(message, details) {
+      pendingRequests.forEach(function (entry) {
+        clearRequestTimer(entry);
+        try {
+          entry.reject(
+            createWorkerRequestError(
+              entry.cmd,
+              message || 'A8E worker request "' + entry.cmd + '" failed',
+              Object.assign(
+                {
+                  code: "worker_request_failed",
+                  phase: "worker_request_failed",
+                  reason: "worker_unavailable",
+                },
+                details && typeof details === "object" ? details : {},
+              ),
+            ),
+          );
+        } catch {
+          // ignore
+        }
+      });
+      pendingRequests.clear();
+    }
+
+    function sendRequest(cmd, payload, transfer, requestOptions) {
+      if (disposed) {
+        return Promise.reject(
+          createWorkerRequestError(
+            cmd,
+            "A8E worker app is disposed",
+            {
+              code: "worker_request_disposed",
+              phase: "worker_request_failed",
+              reason: "disposed",
+            },
+          ),
+        );
+      }
+      const id = requestSeq++;
+      const msg = {
+        type: "req",
+        id: id,
+        cmd: cmd,
+        payload: payload || null,
+      };
+      return new Promise(function (resolve, reject) {
+        const entry = {
+          id: id,
+          cmd: String(cmd || ""),
+          resolve: resolve,
+          reject: reject,
+          timeoutMs: getRequestTimeoutMs(cmd, requestOptions),
+          timeoutId: 0,
+          timeoutStarted: false,
+        };
+        pendingRequests.set(id, entry);
+        if (!ready) {
+          queuePendingMessage(msg, transfer || null);
+          return;
+        }
+        try {
+          startRequestTimer(entry);
+          postRaw(msg, transfer || null);
+        } catch (err) {
+          clearRequestTimer(entry);
+          pendingRequests.delete(id);
+          reject(err);
+        }
+      });
+    }
+
+    worker.onmessage = function (e) {
+      if (disposed) return;
+      const data = e && e.data ? e.data : null;
+      if (!data || !data.type) return;
+
+      if (data.type === "init-done") {
+        ready = true;
+        state.rendererBackend =
+          typeof data.rendererBackend === "string"
+            ? data.rendererBackend
+            : "unknown";
+        while (pending.length) {
+          const next = pending.shift();
+          dispatchPendingMessage(next);
+        }
+        return;
+      }
+
+      if (data.type === "state") {
+        applyWorkerStateSnapshot(data);
+        return;
+      }
+
+      if (data.type === "debugState") {
+        emitDebugState(data.debug || null);
+        return;
+      }
+
+      if (data.type === "hostfsSnapshot") {
+        hostFsProxy.snapshotFromWire(data.files || []);
+        return;
+      }
+
+      if (data.type === "response") {
+        const id = data.id | 0;
+        const pendingRequest = pendingRequests.get(id) || null;
+        if (!pendingRequest) return;
+        pendingRequests.delete(id);
+        clearRequestTimer(pendingRequest);
+        if (data.ok === false) {
+          pendingRequest.reject(
+            hydrateWorkerError(
+              data.error || "A8E worker request failed",
+              pendingRequest.cmd,
+            ),
+          );
+          return;
+        }
+        if (data.result && data.result.state) {
+          applyWorkerStateSnapshot(data.result.state);
+        }
+        pendingRequest.resolve(
+          data.result === undefined ? null : data.result,
+        );
+        return;
+      }
+
+      if (data.type === "error") {
+        console.error("A8E worker error:", data.message || "unknown error");
+      }
+    };
+
+    worker.onerror = function (err) {
+      if (disposed) return;
+      rejectPendingRequests("A8E worker failed", {
+        code: "worker_request_worker_failed",
+        reason: "worker_failed",
+      });
+      console.error("A8E worker failed:", err);
+    };
+
+    const offscreen = canvas.transferControlToOffscreen();
+
+    postRaw(
+      {
+        type: "init",
+        canvas: offscreen,
+        audioPort: audioChannel.port2,
+        width: canvas.width | 0,
+        height: canvas.height | 0,
+        audioSampleRate: audioBridge.getSampleRateHint(),
+        audioEnabled: !!opts.audioEnabled,
+        turbo: !!opts.turbo,
+        sioTurbo: opts.sioTurbo !== false,
+        optionOnStart: !!opts.optionOnStart,
+        keyboardMappingMode: keyboardMappingMode,
+      },
+      [offscreen, audioChannel.port2],
+    );
+
+    const hDeviceProxy = {
+      getHostFs: function () {
+        return hostFsProxy.api;
+      },
+    };
+
+    return {
+      start: function () {
+        state.running = true;
+        audioBridge.resumeFromGesture();
+        return sendRequest("start");
+      },
+      pause: function () {
+        state.running = false;
+        return sendRequest("pause");
+      },
+      reset: function (options) {
+        state.running = false;
+        return sendRequest("reset", options || null);
+      },
+      setTurbo: function (v) {
+        state.turbo = !!v;
+        sendCommand("setTurbo", { value: !!v });
+      },
+      getTurbo: function () {
+        return state.turbo;
+      },
+      setSioTurbo: function (v) {
+        state.sioTurbo = !!v;
+        sendCommand("setSioTurbo", { value: !!v });
+      },
+      getSioTurbo: function () {
+        return state.sioTurbo;
+      },
+      setAudioEnabled: function (v) {
+        state.audioEnabled = !!v;
+        if (v) audioBridge.resumeFromGesture();
+        sendCommand("setAudioEnabled", { value: !!v });
+      },
+      getAudioEnabled: function () {
+        return state.audioEnabled;
+      },
+      setOptionOnStart: function (v) {
+        state.optionOnStart = !!v;
+        sendCommand("setOptionOnStart", { value: !!v });
+      },
+      getOptionOnStart: function () {
+        return state.optionOnStart;
+      },
+      setKeyboardMappingMode: function (mode) {
+        keyboardMappingMode = mode === "original" ? "original" : "translated";
+        sendCommand("setKeyboardMappingMode", { mode: keyboardMappingMode });
+      },
+      getKeyboardMappingMode: function () {
+        return keyboardMappingMode;
+      },
+      setBreakpoints: function (addresses) {
+        sendCommand("setBreakpoints", {
+          addresses: Array.isArray(addresses) ? addresses.slice(0) : [],
+        });
+      },
+      stepInstruction: function () {
+        sendCommand("stepInstruction");
+        return true;
+      },
+      stepOver: function () {
+        sendCommand("stepOver");
+        return true;
+      },
+      stepInstructionAsync: function () {
+        return sendRequest("stepInstruction");
+      },
+      stepOverAsync: function () {
+        return sendRequest("stepOver");
+      },
+      getDebugState: function () {
+        return state.debugState ? Object.assign({}, state.debugState) : null;
+      },
+      getDebugStateAsync: function () {
+        return sendRequest("getDebugState").then(function (result) {
+          return result && typeof result === "object"
+            ? cloneDebugState(result)
+            : null;
+        });
+      },
+      getCounters: function () {
+        return sendRequest("getCounters");
+      },
+      getTraceTail: function (limit) {
+        return sendRequest("getTraceTail", {
+          limit: limit | 0,
+        });
+      },
+      runUntilPc: function (targetPc, opts) {
+        const payload = Object.assign({}, opts || {});
+        if (targetPc !== null && targetPc !== undefined) {
+          payload.targetPc = targetPc | 0;
+        }
+        return sendRequest("runUntilPc", payload);
+      },
+      readMemory: function (address) {
+        return sendRequest("readMemory", {
+          address: address | 0,
+        }).then(function (result) {
+          return result && typeof result.value === "number"
+            ? (result.value | 0) & 0xff
+            : 0;
+        });
+      },
+      readRange: function (start, length) {
+        return sendRequest("readRange", {
+          start: start | 0,
+          length: length | 0,
+        }).then(function (result) {
+          return toUint8(result && result.buffer ? result.buffer : null);
+        });
+      },
+      writeMemory: function (address, value) {
+        return sendRequest("writeMemory", {
+          address: address | 0,
+          value: value | 0,
+        }).then(function (result) {
+          return result && typeof result.value === "number"
+            ? (result.value | 0) & 0xff
+            : 0;
+        });
+      },
+      writeRange: function (start, data) {
+        const bytes = toUint8(data);
+        return sendRequest("writeRange", {
+          start: start | 0,
+          buffer: toArrayBuffer(bytes),
+        }).then(function (result) {
+          return result && typeof result.length === "number"
+            ? result.length | 0
+            : bytes.length | 0;
+        });
+      },
+      getBankState: function () {
+        return sendRequest("getBankState");
+      },
+      getMountedDiskForDeviceSlot: function (slot) {
+        return sendRequest("getMountedDiskForDeviceSlot", {
+          slot: slot | 0,
+        });
+      },
+      getConsoleKeyState: function () {
+        return sendRequest("getConsoleKeyState");
+      },
+      captureScreenshot: function () {
+        return sendRequest("captureScreenshot").then(function (result) {
+          if (result && result.buffer && isArrayBufferLike(result.buffer)) {
+            result.bytes = new Uint8Array(result.buffer);
+            delete result.buffer;
+          }
+          return result || null;
+        });
+      },
+      collectArtifacts: function (opts) {
+        return sendRequest("collectArtifacts", opts || null);
+      },
+      saveSnapshot: function (options) {
+        return sendRequest("saveSnapshot", options || null).then(function (result) {
+          if (result && result.buffer && isArrayBufferLike(result.buffer)) {
+            result.bytes = new Uint8Array(result.buffer);
+          }
+          return result || null;
+        });
+      },
+      loadSnapshot: function (data, options) {
+        const buffer = toArrayBuffer(data);
+        return sendRequest(
+          "loadSnapshot",
+          {
+            buffer: buffer,
+            options: options && typeof options === "object" ? options : null,
+          },
+          [buffer],
+        );
+      },
+      onDebugStateChange: function (fn) {
+        if (typeof fn !== "function") return function () {};
+        debugListeners.add(fn);
+        return function () {
+          debugListeners.delete(fn);
+        };
+      },
+      loadOsRom: function (arrayBuffer) {
+        state.hasOsRom = true;
+        syncReadyFlag();
+        const buf = toArrayBuffer(arrayBuffer);
+        sendCommand("loadOsRom", { buffer: buf }, [buf]);
+      },
+      loadBasicRom: function (arrayBuffer) {
+        state.hasBasicRom = true;
+        syncReadyFlag();
+        const buf = toArrayBuffer(arrayBuffer);
+        sendCommand("loadBasicRom", { buffer: buf }, [buf]);
+      },
+      loadDiskToDeviceSlot: function (arrayBuffer, name, slot) {
+        const idx = slot | 0;
+        if (idx >= 0 && idx < state.mounted.length) state.mounted[idx] = true;
+        const buf = toArrayBuffer(arrayBuffer);
+        sendCommand(
+          "loadDiskToDeviceSlot",
+          { buffer: buf, name: name || "", slot: idx },
+          [buf],
+        );
+      },
+      loadDiskToDeviceSlotDetailed: function (arrayBuffer, name, slot, options) {
+        const idx = slot | 0;
+        const buf = toArrayBuffer(arrayBuffer);
+        return sendRequest(
+          "loadDiskToDeviceSlot",
+          {
+            buffer: buf,
+            name: name || "",
+            slot: idx,
+            options: options && typeof options === "object" ? options : null,
+          },
+          [buf],
+          { timeoutMs: REQUEST_TIMEOUT_MS.loadDiskToDeviceSlot },
+        ).then(function (result) {
+          if (idx >= 0 && idx < state.mounted.length) state.mounted[idx] = true;
+          return result || null;
+        });
+      },
+      mountImageToDeviceSlot: function (image, slot) {
+        const idx = slot | 0;
+        if (idx >= 0 && idx < state.mounted.length) state.mounted[idx] = true;
+        sendCommand("mountImageToDeviceSlot", {
+          image: image || null,
+          slot: idx,
+        });
+      },
+      unmountDeviceSlot: function (slot) {
+        const idx = slot | 0;
+        if (idx >= 0 && idx < state.mounted.length) state.mounted[idx] = false;
+        sendCommand("unmountDeviceSlot", { slot: idx });
+      },
+      hasMountedDiskForDeviceSlot: function (slot) {
+        const idx = slot | 0;
+        if (idx < 0 || idx >= state.mounted.length) return false;
+        return !!state.mounted[idx];
+      },
+      hDevice: hDeviceProxy,
+      hasOsRom: function () {
+        return !!state.hasOsRom;
+      },
+      hasBasicRom: function () {
+        return !!state.hasBasicRom;
+      },
+      isReady: function () {
+        return !!state.ready;
+      },
+      isRunning: function () {
+        return !!state.running;
+      },
+      setRenderSize: function (w, h) {
+        sendCommand("setRenderSize", {
+          width: w | 0,
+          height: h | 0,
+        });
+      },
+      getRendererBackend: function () {
+        return state.rendererBackend;
+      },
+      isWorkerBackend: function () {
+        return true;
+      },
+      dispose: function () {
+        if (disposed) return;
+        disposed = true;
+        rejectPendingRequests("A8E worker app disposed", {
+          code: "worker_request_disposed",
+          reason: "disposed",
+        });
+        try {
+          sendCommand("dispose");
+        } catch {
+          // ignore
+        }
+        try {
+          worker.terminate();
+        } catch {
+          // ignore
+        }
+        audioBridge.dispose();
+      },
+      onKeyDown: function (ev) {
+        sendCommand("onKeyDown", { event: ev || null });
+        return true;
+      },
+      onKeyUp: function (ev) {
+        sendCommand("onKeyUp", { event: ev || null });
+        return true;
+      },
+      releaseAllKeys: function () {
+        sendCommand("releaseAllKeys");
+      },
+    };
+  }
+
+  function createLegacyApp(opts) {
+    if (!legacyCreate) throw new Error("A8EApp: no available backend");
+    const legacyOpts = Object.assign({}, opts);
+    if (!legacyOpts.gl && !legacyOpts.ctx2d && legacyOpts.canvas) {
+      try {
+        legacyOpts.ctx2d = legacyOpts.canvas.getContext("2d", { alpha: false });
+      } catch {
+        legacyOpts.ctx2d = null;
+      }
+    }
+    const app = legacyCreate(legacyOpts);
+    if (app && typeof app.setRenderSize !== "function")
+      {app.setRenderSize = function () {};}
+    if (app && typeof app.setKeyboardMappingMode !== "function")
+      {app.setKeyboardMappingMode = function () {};}
+    if (app && typeof app.setBreakpoints !== "function")
+      {app.setBreakpoints = function () {};}
+    if (app && typeof app.stepInstruction !== "function")
+      {app.stepInstruction = function () { return false; };}
+    if (app && typeof app.stepOver !== "function")
+      {app.stepOver = function () { return false; };}
+    if (app && typeof app.stepInstructionAsync !== "function")
+      {app.stepInstructionAsync = function () {
+        return {
+          ok: false,
+          reason: "unsupported",
+          debugState: app.getDebugState ? app.getDebugState() : null,
+        };
+      };}
+    if (app && typeof app.stepOverAsync !== "function")
+      {app.stepOverAsync = function () {
+        return {
+          ok: false,
+          reason: "unsupported",
+          debugState: app.getDebugState ? app.getDebugState() : null,
+        };
+      };}
+    if (app && typeof app.getDebugState !== "function")
+      {app.getDebugState = function () { return null; };}
+    if (app && typeof app.getCounters !== "function")
+      {app.getCounters = function () { return null; };}
+    if (app && typeof app.getTraceTail !== "function")
+      {app.getTraceTail = function () { return []; };}
+    if (app && typeof app.runUntilPc !== "function")
+      {app.runUntilPc = function () { return { ok: false, reason: "unsupported" }; };}
+    if (app && typeof app.readMemory !== "function")
+      {app.readMemory = function () { return 0; };}
+    if (app && typeof app.readRange !== "function")
+      {app.readRange = function () { return new Uint8Array(0); };}
+    if (app && typeof app.writeMemory !== "function")
+      {app.writeMemory = function (_address, value) { return (value | 0) & 0xff; };}
+    if (app && typeof app.writeRange !== "function")
+      {app.writeRange = function (_start, data) {
+        const bytes = toUint8(data);
+        return bytes.length | 0;
+      };}
+    if (app && typeof app.getBankState !== "function")
+      {app.getBankState = function () { return null; };}
+    if (app && typeof app.getMountedDiskForDeviceSlot !== "function")
+      {app.getMountedDiskForDeviceSlot = function () { return null; };}
+    if (app && typeof app.getConsoleKeyState !== "function")
+      {app.getConsoleKeyState = function () { return null; };}
+    if (app && typeof app.captureScreenshot !== "function")
+      {app.captureScreenshot = function () {
+        return Promise.reject(new Error("A8E screenshot capture unavailable"));
+      };}
+    if (app && typeof app.collectArtifacts !== "function")
+      {app.collectArtifacts = function () { return null; };}
+    if (app && typeof app.saveSnapshot !== "function")
+      {app.saveSnapshot = function () {
+        return Promise.reject(new Error("A8E snapshot save unavailable"));
+      };}
+    if (app && typeof app.loadSnapshot !== "function")
+      {app.loadSnapshot = function () {
+        return Promise.reject(new Error("A8E snapshot load unavailable"));
+      };}
+    if (app && typeof app.loadDiskToDeviceSlotDetailed !== "function")
+      {app.loadDiskToDeviceSlotDetailed = function (arrayBuffer, name, slot, options) {
+        const imageIndex = app.loadDiskToDeviceSlot
+          ? app.loadDiskToDeviceSlot(arrayBuffer, name, slot)
+          : null;
+        return {
+          imageIndex: imageIndex,
+          deviceSlot: slot | 0,
+          format: /\.xex$/i.test(String(name || "")) ? "xex" : "atr",
+          sourceByteLength:
+            arrayBuffer && typeof arrayBuffer.byteLength === "number"
+              ? arrayBuffer.byteLength | 0
+              : 0,
+          mountedByteLength:
+            arrayBuffer && typeof arrayBuffer.byteLength === "number"
+              ? arrayBuffer.byteLength | 0
+              : 0,
+          xexPreflight:
+            options && typeof options === "object" && options.xexPreflight
+              ? options.xexPreflight
+              : null,
+        };
+      };}
+    if (app && typeof app.onDebugStateChange !== "function")
+      {app.onDebugStateChange = function () { return function () {}; };}
+    if (app && typeof app.isWorkerBackend !== "function")
+      {app.isWorkerBackend = function () { return false; };}
+    return app;
+  }
+
+  function create(opts) {
+    if (!shouldUseWorker(opts)) {
+      return createLegacyApp(opts);
+    }
+
+    try {
+      return createWorkerApp(opts);
+    } catch {
+      return createLegacyApp(opts);
+    }
+  }
+
+  window.A8EApp = {
+    create: create,
+    supportsWorker: supportsWorker,
+    shouldUseWorker: shouldUseWorker,
+  };
+})();

@@ -1,0 +1,53 @@
+# Changelog
+
+> Hardware emulation reference: Before implementing any Atari 800 XL PAL machine related hardware emulation, use the [AHRM](/AHRM/index.md) as reference.
+
+All notable changes to this project will be documented in this file.
+
+## Unreleased
+
+### Changed
+- Documentation now consistently states that Atari 800 XL PAL hardware-emulation implementation work should use `AHRM/index.md` as the reference baseline (applied across non-AHRM Markdown docs).
+- Native `A8E` build caption/version is now injected at compile time from `jsA8E/version.json` (with `dev` fallback when unavailable).
+- Browser `jsA8E` frame timing now accumulates CPU cycles and runs whole-frame steps with capped catch-up to reduce visible speed jitter.
+- Browser rendering now requests `desynchronized` WebGL contexts and hints `canvas` transforms for smoother presentation.
+
+### Fixed
+- Native `A8E` now ignores out-of-range SDL keysyms (e.g. macOS Command/LGUI) when mapping to Atari key codes; previously hitting ⌘ would index past the key table and crash the emulator.
+- Hardened `jsA8E` SIO disk sector access checks across read/write/verify paths to reject invalid offsets consistently.
+
+## v1.1.1 - 2026-02-17
+
+### Changed
+- XEX boot-loader handling in native `A8E` and browser `jsA8E` now chooses a non-overlapping temporary sector buffer and patches loader buffer addresses dynamically.
+
+### Fixed
+- XEX-to-ATR conversion now rejects images whose segments overlap reserved boot-loader memory, preventing invalid boot media generation.
+
+## v1.1.0 - 2026-02-17
+
+### Added
+- Direct `.xex` program loading support in both native `A8E` and browser `jsA8E` paths.
+- XEX-to-ATR conversion with segment normalization to support multi-segment files in both implementations.
+
+### Changed
+- Embedded XEX boot loader updated to handle `INITAD`/`RUNAD` flow more robustly across native and JS builds.
+- Documentation updated to describe ATR/XEX loading behavior and usage.
+
+### Fixed
+- Corrected inclusive segment end-copy behavior (off-by-one) in the XEX boot loader for native and JS.
+- Added failure handling for invalid/unsupported XEX conversion paths to avoid mounting bad disk data.
+
+## v1.0.1 - 2026-02-13
+
+### Added
+- Automated release workflow to update `jsA8E/version.json` from the published Git tag.
+- Runtime build version display in `jsA8E` (`version.json` + `js/app/version.js`).
+- Help tooltip legend for ROM status and top-menu icons in `jsA8E`.
+
+### Changed
+- Improved browser keyboard handling in `jsA8E` with printable key normalization and side-specific modifier mapping.
+- Refined on-screen keyboard typography and responsive key label sizing in `jsA8E`.
+
+### Fixed
+- Native `A8E` event loop now forwards only keyboard events to `AtariIoKeyboardEvent`, avoiding non-key event forwarding.
