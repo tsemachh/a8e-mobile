@@ -538,6 +538,53 @@
       return 0;
     }
 
+    // Hoisted constants/scratch for drawPlayerMissilesClock: it runs for
+    // every color clock span (~20k calls/frame), so per-call allocations
+    // (arrays, closures, typed arrays) dominated mobile CPU profiles.
+    const PMG_PLAYER_GRAF_REGS = [
+      IO_GRAFP0_P1PL,
+      IO_GRAFP1_P2PL,
+      IO_GRAFP2_P3PL,
+      IO_GRAFP3_TRIG0,
+    ];
+    const PMG_PLAYER_HPOS_REGS = [
+      IO_HPOSP0_M0PF,
+      IO_HPOSP1_M1PF,
+      IO_HPOSP2_M2PF,
+      IO_HPOSP3_M3PF,
+    ];
+    const PMG_PLAYER_SIZE_REGS = [
+      IO_SIZEP0_M0PL,
+      IO_SIZEP1_M1PL,
+      IO_SIZEP2_M2PL,
+      IO_SIZEP3_M3PL,
+    ];
+    const PMG_MISSILE_HPOS_REGS = [
+      IO_HPOSM0_P0PF,
+      IO_HPOSM1_P1PF,
+      IO_HPOSM2_P2PF,
+      IO_HPOSM3_P3PF,
+    ];
+    const PMG_MISSILE_MASKS = [0x03, 0x0c, 0x30, 0xc0];
+    const pmgPlayerCollisionScratch = new Uint16Array(4);
+    const pmgMissileCollisionScratch = new Uint16Array(4);
+
+    function primePlayerClockAt(sram, playerShift, playerState, index, x) {
+      const data = sram[PMG_PLAYER_GRAF_REGS[index]] & 0xff;
+      const hpos = pmgStartX(sram[PMG_PLAYER_HPOS_REGS[index]] & 0xff);
+      const size = sram[PMG_PLAYER_SIZE_REGS[index]] & 0xff;
+      if (x === hpos && data) reloadPlayerShift(playerShift, playerState, index, data);
+      advancePlayerShift(playerShift, playerState, index, size);
+    }
+
+    function primeMissileClockAt(sram, missileShift, missileState, index, x) {
+      const data = (sram[IO_GRAFM_TRIG1] & PMG_MISSILE_MASKS[index]) >> (index * 2);
+      const hpos = pmgStartX(sram[PMG_MISSILE_HPOS_REGS[index]] & 0xff);
+      const size = sram[IO_SIZEM_P0PL] & 0xff;
+      if (x === hpos && data) reloadMissileShift(missileShift, missileState, index, data);
+      advanceMissileShift(missileShift, missileState, index, size);
+    }
+
     function drawPlayerMissilesClock(ctx, spanStart) {
       const io = ctx.ioData;
       const ram = ctx.ram;
@@ -571,68 +618,21 @@
       const playerState = io.drawLine.playerPmgState;
       const missileShift = io.drawLine.missilePmgShift;
       const missileState = io.drawLine.missilePmgState;
-      const playerGrafRegs = [
-        IO_GRAFP0_P1PL,
-        IO_GRAFP1_P2PL,
-        IO_GRAFP2_P3PL,
-        IO_GRAFP3_TRIG0,
-      ];
-      const playerHposRegs = [
-        IO_HPOSP0_M0PF,
-        IO_HPOSP1_M1PF,
-        IO_HPOSP2_M2PF,
-        IO_HPOSP3_M3PF,
-      ];
-      const playerSizeRegs = [
-        IO_SIZEP0_M0PL,
-        IO_SIZEP1_M1PL,
-        IO_SIZEP2_M2PL,
-        IO_SIZEP3_M3PL,
-      ];
-      const playerColorRegs = [
-        IO_COLPM0_TRIG2,
-        IO_COLPM1_TRIG3,
-        IO_COLPM2_PAL,
-        IO_COLPM3,
-      ];
-      const playerPriorityBits = [PRIO_PM0, PRIO_PM1, PRIO_PM2, PRIO_PM3];
-      const playerOverlapMasks = [prior & 0x20 ? PRIO_PM1 : 0, 0, prior & 0x20 ? PRIO_PM3 : 0, 0];
-      const missileHposRegs = [
-        IO_HPOSM0_P0PF,
-        IO_HPOSM1_P1PF,
-        IO_HPOSM2_P2PF,
-        IO_HPOSM3_P3PF,
-      ];
-      const missileMasks = [0x03, 0x0c, 0x30, 0xc0];
-      const playerCollision = new Uint16Array(4);
-      const missileCollision = new Uint16Array(4);
-
-      function primePlayerClock(index, x) {
-        const data = sram[playerGrafRegs[index]] & 0xff;
-        const hpos = pmgStartX(sram[playerHposRegs[index]] & 0xff);
-        const size = sram[playerSizeRegs[index]] & 0xff;
-        if (x === hpos && data) reloadPlayerShift(playerShift, playerState, index, data);
-        advancePlayerShift(playerShift, playerState, index, size);
-      }
-
-      function primeMissileClock(index, x) {
-        const data = (sram[IO_GRAFM_TRIG1] & missileMasks[index]) >> (index * 2);
-        const hpos = pmgStartX(sram[missileHposRegs[index]] & 0xff);
-        const size = sram[IO_SIZEM_P0PL] & 0xff;
-        if (x === hpos && data) reloadMissileShift(missileShift, missileState, index, data);
-        advanceMissileShift(missileShift, missileState, index, size);
-      }
+      const playerCollision = pmgPlayerCollisionScratch;
+      const missileCollision = pmgMissileCollisionScratch;
+      playerCollision[0] = playerCollision[1] = playerCollision[2] = playerCollision[3] = 0;
+      missileCollision[0] = missileCollision[1] = missileCollision[2] = missileCollision[3] = 0;
 
       if (io.drawLine.pmgFirstVisibleSpan) {
         for (let x = 0; x < visibleSpanStart; x += 2) {
-          primePlayerClock(3, x);
-          primePlayerClock(2, x);
-          primePlayerClock(1, x);
-          primePlayerClock(0, x);
-          primeMissileClock(3, x);
-          primeMissileClock(2, x);
-          primeMissileClock(1, x);
-          primeMissileClock(0, x);
+          primePlayerClockAt(sram, playerShift, playerState, 3, x);
+          primePlayerClockAt(sram, playerShift, playerState, 2, x);
+          primePlayerClockAt(sram, playerShift, playerState, 1, x);
+          primePlayerClockAt(sram, playerShift, playerState, 0, x);
+          primeMissileClockAt(sram, missileShift, missileState, 3, x);
+          primeMissileClockAt(sram, missileShift, missileState, 2, x);
+          primeMissileClockAt(sram, missileShift, missileState, 1, x);
+          primeMissileClockAt(sram, missileShift, missileState, 0, x);
         }
         io.drawLine.pmgFirstVisibleSpan = false;
       }
