@@ -168,6 +168,26 @@
     const closeBtn = document.getElementById("romPickerClose");
     if (closeBtn) closeBtn.addEventListener("click", hide);
 
+    // Show deploy time (stamped by the Pages workflow) so it's easy to see
+    // whether the running version is up to date.
+    const buildEl = document.getElementById("romPickerBuild");
+    if (buildEl) {
+      fetch("build-info.json", { cache: "no-cache" })
+        .then(function (response) {
+          return response.ok ? response.json() : null;
+        })
+        .then(function (info) {
+          if (!info || !info.deployedAt) return;
+          buildEl.textContent =
+            "Deployed: " +
+            info.deployedAt +
+            (info.commit ? " (" + info.commit + ")" : "");
+        })
+        .catch(function () {
+          /* offline or missing - leave empty */
+        });
+    }
+
     manifestUrl = getQueryParam("romlist") || DEFAULT_MANIFEST_URL;
 
     fetch(manifestUrl, { cache: "no-cache" })

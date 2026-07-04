@@ -25,6 +25,11 @@ jobs:
         uses: actions/checkout@v4
       - name: Stamp service worker cache version with commit SHA
         run: sed -i "s/a8e-v1/a8e-${GITHUB_SHA::8}/" jsA8E/sw.js
+      - name: Stamp deploy time into build-info.json
+        run: |
+          printf '{ "deployedAt": "%s", "commit": "%s" }\n' \
+            "$(date -u +'%Y-%m-%d %H:%M UTC')" "${GITHUB_SHA::8}" \
+            > jsA8E/build-info.json
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact (repo root, so jsA8E/ can fetch ../ATARIXL.ROM and ../roms/)

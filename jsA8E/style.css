@@ -2963,3 +2963,10 @@ body:not(.mobileGame) .mobileControls {
 .romPickerInstallBtn[hidden] {
   display: none;
 }
+
+.romPickerBuild {
+  padding: 0 18px 12px;
+  color: var(--sub-panel-dim);
+  font-size: var(--fs-xs);
+  text-align: center;
+}

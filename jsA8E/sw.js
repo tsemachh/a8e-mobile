@@ -56,9 +56,11 @@ self.addEventListener("fetch", function (event) {
   const url = new URL(request.url);
   if (!isSameOrigin(url)) return; // let CDNs (fonts, fflate) hit the network
 
-  const isManifestJson = url.pathname.endsWith("roms.json");
+  const isAlwaysFresh =
+    url.pathname.endsWith("roms.json") ||
+    url.pathname.endsWith("build-info.json");
 
-  if (isManifestJson) {
+  if (isAlwaysFresh) {
     // Network-first: pick up newly added games, fall back offline.
     event.respondWith(
       fetch(request)
