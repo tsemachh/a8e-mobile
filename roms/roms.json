@@ -95,12 +95,20 @@
       "file": "FortApocalypse.atr"
     },
     {
+      "name": "Frogger",
+      "file": "Frogger.atr"
+    },
+    {
       "name": "Frogger II",
       "file": "FroggerIi.atr"
     },
     {
       "name": "Galaxian",
       "file": "Galaxian.atr"
+    },
+    {
+      "name": "Gyruss",
+      "file": "Gyruss.atr"
     },
     {
       "name": "Gyruss II",
@@ -125,6 +133,14 @@
     {
       "name": "Jungle Hunt",
       "file": "JungleHunt.atr"
+    },
+    {
+      "name": "Karateka",
+      "file": "Karateka.atr"
+    },
+    {
+      "name": "Keystone Kapers",
+      "file": "KeystoneKapers.atr"
     },
     {
       "name": "Krazy Shootout",
@@ -179,6 +195,10 @@
       "file": "PharaohSCurse.atr"
     },
     {
+      "name": "Pitfall",
+      "file": "PitfallI.atr"
+    },
+    {
       "name": "Pitfall II",
       "file": "PitfallIi.atr"
     },
@@ -193,6 +213,10 @@
     {
       "name": "Pong",
       "file": "Pong.atr"
+    },
+    {
+      "name": "Pooyan",
+      "file": "Pooyan.atr"
     },
     {
       "name": "Popcorn",
@@ -245,6 +269,10 @@
     {
       "name": "Up Up N Away",
       "file": "UpUpNAwayPulsar.atr"
+    },
+    {
+      "name": "Vanguard",
+      "file": "Vanguard.atr"
     },
     {
       "name": "Volleyball",
