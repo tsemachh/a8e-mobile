@@ -1,10 +1,12 @@
 {
+  "id": "./",
   "name": "jsA8E - Atari 800 XL",
   "short_name": "A8E",
   "description": "Atari 800 XL emulator with game picker and touch controls",
   "start_url": "index.html",
   "scope": "./",
-  "display": "fullscreen",
+  "display": "standalone",
+  "display_override": ["fullscreen", "standalone"],
   "orientation": "landscape",
   "background_color": "#0d1117",
   "theme_color": "#0d1117",
@@ -19,7 +21,13 @@
       "src": "icons/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }

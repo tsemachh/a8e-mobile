@@ -480,17 +480,21 @@
     </main>
 
     <div id="mobileControls" class="mobileControls" hidden>
+      <div id="mcTouchLayer" class="mcTouchLayer" aria-label="Touch anywhere to steer"></div>
       <button type="button" id="mcConfigBtn" class="mcFloatBtn mcConfigBtn" aria-label="Toggle toolbar"><i class="fa-solid fa-gear"></i></button>
       <button type="button" id="mcMenuBtn" class="mcFloatBtn mcMenuBtn" aria-label="Toggle console keys"><i class="fa-solid fa-bars"></i></button>
       <div id="mcConsole" class="mcConsole" hidden>
         <button type="button" class="mcConsoleBtn" id="mcOption">OPTION</button>
         <button type="button" class="mcConsoleBtn" id="mcSelect">SELECT</button>
         <button type="button" class="mcConsoleBtn" id="mcStart">START</button>
+        <button type="button" class="mcConsoleBtn mcToggle" id="mcTilt">TILT</button>
+        <button type="button" class="mcConsoleBtn mcToggle" id="mcAutoFire">AUTO&nbsp;FIRE</button>
         <button type="button" class="mcConsoleBtn mcGames" id="mcGames">GAMES</button>
       </div>
       <div id="mcDpad" class="mcDpad" aria-label="Joystick pad">
         <div class="mcDpadNub" id="mcDpadNub"></div>
       </div>
+      <div id="mcGhostStick" class="mcGhostStick" hidden><div class="mcGhostNub" id="mcGhostNub"></div></div>
       <button type="button" id="mcFire" class="mcFire" aria-label="Fire">FIRE</button>
     </div>
 

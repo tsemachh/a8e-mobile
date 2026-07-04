@@ -34,8 +34,9 @@
       "file": "BlueMax.atr"
     },
     {
-      "name": "Boulderdash 1",
-      "file": "Boulderdash1.atr"
+      "name": "Boulder Dash",
+      "file": "BoulderDash.atr",
+      "description": "First Star Software, 1984"
     },
     {
       "name": "Bounty Bob Strikes Back",

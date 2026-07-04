@@ -1357,15 +1357,147 @@
     bindConsoleKeyButton(CONSOLE_KEY_DEFS[1], document.getElementById("mcSelect"));
     bindConsoleKeyButton(CONSOLE_KEY_DEFS[2], document.getElementById("mcStart"));
 
-    // Semi-transparent overlay D-pad + fire for mobile game mode.
+    // Semi-transparent overlay controls for mobile game mode: a small fixed
+    // D-pad, a full-screen floating stick (touch anywhere and drag), a fire
+    // button, plus tilt-steering and auto-fire toggles.
+    let manualFireHeld = false;
+    let autoFireTimer = 0;
+    let autoFirePhase = false;
+
+    function setAutoFireEnabled(active) {
+      const next = !!active;
+      if (next === (autoFireTimer !== 0)) return;
+      if (next) {
+        autoFireTimer = window.setInterval(function () {
+          if (manualFireHeld) return; // manual press wins
+          autoFirePhase = !autoFirePhase;
+          setJoystickFire(autoFirePhase);
+        }, 100);
+      } else {
+        window.clearInterval(autoFireTimer);
+        autoFireTimer = 0;
+        autoFirePhase = false;
+        if (!manualFireHeld) setJoystickFire(false);
+      }
+    }
+
+    const TILT_THRESHOLD_DEG = 8;
+    let tiltEnabled = false;
+    let tiltBase = null;
+
+    function tiltAxes(e) {
+      // Map device orientation to screen-relative x (right+) / y (down+)
+      // regardless of portrait/landscape rotation.
+      let angle = 0;
+      try {
+        angle =
+          (screen.orientation && screen.orientation.angle) ||
+          window.orientation ||
+          0;
+      } catch {
+        angle = 0;
+      }
+      const beta = e.beta || 0; // front-back tilt
+      const gamma = e.gamma || 0; // left-right tilt
+      switch (((angle % 360) + 360) % 360) {
+        case 90:
+          return { x: beta, y: -gamma };
+        case 180:
+          return { x: -gamma, y: -beta };
+        case 270:
+          return { x: -beta, y: gamma };
+        default:
+          return { x: gamma, y: beta };
+      }
+    }
+
+    function onTiltReading(e) {
+      if (!tiltEnabled) return;
+      const axes = tiltAxes(e);
+      if (!tiltBase) {
+        // First reading after enabling = neutral position.
+        tiltBase = axes;
+        return;
+      }
+      const dx = axes.x - tiltBase.x;
+      const dy = axes.y - tiltBase.y;
+      setJoystickDirection(
+        dy < -TILT_THRESHOLD_DEG,
+        dy > TILT_THRESHOLD_DEG,
+        dx < -TILT_THRESHOLD_DEG,
+        dx > TILT_THRESHOLD_DEG,
+      );
+    }
+
+    function setTiltEnabled(active, statusCb) {
+      const next = !!active;
+      if (next === tiltEnabled) return Promise.resolve(tiltEnabled);
+      if (!next) {
+        tiltEnabled = false;
+        tiltBase = null;
+        window.removeEventListener("deviceorientation", onTiltReading);
+        setJoystickDirection(false, false, false, false);
+        return Promise.resolve(false);
+      }
+      const enable = function () {
+        tiltEnabled = true;
+        tiltBase = null; // recalibrate on next reading
+        window.addEventListener("deviceorientation", onTiltReading);
+        return true;
+      };
+      // iOS 13+ requires an explicit permission request from a user gesture.
+      if (
+        typeof DeviceOrientationEvent !== "undefined" &&
+        typeof DeviceOrientationEvent.requestPermission === "function"
+      ) {
+        return DeviceOrientationEvent.requestPermission()
+          .then(function (state) {
+            if (state === "granted") return enable();
+            if (statusCb) statusCb("Motion permission denied");
+            return false;
+          })
+          .catch(function () {
+            if (statusCb) statusCb("Motion permission unavailable");
+            return false;
+          });
+      }
+      return Promise.resolve(enable());
+    }
+
     function setupMobileOverlayControls() {
       const pad = document.getElementById("mcDpad");
       const nub = document.getElementById("mcDpadNub");
       const fire = document.getElementById("mcFire");
+      const layer = document.getElementById("mcTouchLayer");
+      const ghost = document.getElementById("mcGhostStick");
+      const ghostNub = document.getElementById("mcGhostNub");
       if (!pad || !fire) return;
 
-      let padPointerId = null;
+      let movePointerId = null; // single movement pointer (pad or layer)
 
+      function applyVector(dx, dy, dead, maxDeflect, nubEl) {
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (nubEl) {
+          let nx = dx;
+          let ny = dy;
+          if (dist > maxDeflect) {
+            nx = (dx / dist) * maxDeflect;
+            ny = (dy / dist) * maxDeflect;
+          }
+          nubEl.style.transform = "translate(" + nx + "px, " + ny + "px)";
+        }
+        setJoystickDirection(dy < -dead, dy > dead, dx < -dead, dx > dead);
+      }
+
+      function resetMove() {
+        movePointerId = null;
+        if (nub) nub.style.transform = "";
+        if (ghostNub) ghostNub.style.transform = "";
+        if (ghost) ghost.hidden = true;
+        setJoystickDirection(false, false, false, false);
+      }
+
+      // Fixed mini D-pad.
       function padCenter() {
         const rect = pad.getBoundingClientRect();
         return {
@@ -1375,53 +1507,73 @@
         };
       }
 
-      function applyPad(clientX, clientY) {
-        const c = padCenter();
-        const dx = clientX - c.x;
-        const dy = clientY - c.y;
-        const dead = c.r * 0.28;
-        const maxDeflect = c.r * 0.55;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (nub) {
-          let nx = dx;
-          let ny = dy;
-          if (dist > maxDeflect) {
-            nx = (dx / dist) * maxDeflect;
-            ny = (dy / dist) * maxDeflect;
-          }
-          nub.style.transform = "translate(" + nx + "px, " + ny + "px)";
-        }
-        setJoystickDirection(dy < -dead, dy > dead, dx < -dead, dx > dead);
-      }
-
-      function resetPad() {
-        padPointerId = null;
-        if (nub) nub.style.transform = "";
-        setJoystickDirection(false, false, false, false);
-      }
-
       pad.addEventListener("pointerdown", function (e) {
         e.preventDefault();
-        padPointerId = e.pointerId;
+        movePointerId = e.pointerId;
         try {
           pad.setPointerCapture(e.pointerId);
         } catch {
           /* ignore */
         }
-        applyPad(e.clientX, e.clientY);
+        const c = padCenter();
+        applyVector(e.clientX - c.x, e.clientY - c.y, c.r * 0.28, c.r * 0.55, nub);
       });
       pad.addEventListener("pointermove", function (e) {
-        if (e.pointerId !== padPointerId) return;
+        if (e.pointerId !== movePointerId) return;
         e.preventDefault();
-        applyPad(e.clientX, e.clientY);
+        const c = padCenter();
+        applyVector(e.clientX - c.x, e.clientY - c.y, c.r * 0.28, c.r * 0.55, nub);
       });
-      const endPad = function (e) {
-        if (e.pointerId !== padPointerId) return;
+
+      // Full-screen floating stick: touch anywhere (not on a button), that
+      // point becomes the stick center, drag to steer.
+      let floatOriginX = 0;
+      let floatOriginY = 0;
+      const FLOAT_DEAD = 14;
+      const FLOAT_DEFLECT = 44;
+
+      if (layer) {
+        layer.addEventListener("pointerdown", function (e) {
+          e.preventDefault();
+          movePointerId = e.pointerId;
+          try {
+            layer.setPointerCapture(e.pointerId);
+          } catch {
+            /* ignore */
+          }
+          floatOriginX = e.clientX;
+          floatOriginY = e.clientY;
+          if (ghost) {
+            ghost.hidden = false;
+            ghost.style.left = floatOriginX + "px";
+            ghost.style.top = floatOriginY + "px";
+          }
+          setJoystickDirection(false, false, false, false);
+        });
+        layer.addEventListener("pointermove", function (e) {
+          if (e.pointerId !== movePointerId) return;
+          e.preventDefault();
+          applyVector(
+            e.clientX - floatOriginX,
+            e.clientY - floatOriginY,
+            FLOAT_DEAD,
+            FLOAT_DEFLECT,
+            ghostNub,
+          );
+        });
+      }
+
+      const endMove = function (e) {
+        if (e.pointerId !== movePointerId) return;
         e.preventDefault();
-        resetPad();
+        resetMove();
       };
-      pad.addEventListener("pointerup", endPad);
-      pad.addEventListener("pointercancel", endPad);
+      pad.addEventListener("pointerup", endMove);
+      pad.addEventListener("pointercancel", endMove);
+      if (layer) {
+        layer.addEventListener("pointerup", endMove);
+        layer.addEventListener("pointercancel", endMove);
+      }
 
       fire.addEventListener("pointerdown", function (e) {
         e.preventDefault();
@@ -1430,16 +1582,19 @@
         } catch {
           /* ignore */
         }
+        manualFireHeld = true;
         setJoystickFire(true);
       });
       const endFire = function (e) {
         e.preventDefault();
-        setJoystickFire(false);
+        manualFireHeld = false;
+        if (!autoFireTimer) setJoystickFire(false);
       };
       fire.addEventListener("pointerup", endFire);
       fire.addEventListener("pointercancel", endFire);
 
-      [pad, fire].forEach(function (el) {
+      [pad, fire, layer].forEach(function (el) {
+        if (!el) return;
         el.addEventListener("contextmenu", function (e) {
           e.preventDefault();
         });
@@ -2155,6 +2310,28 @@
       if (mcGames) {
         mcGames.addEventListener("click", function () {
           if (window.A8ERomPicker) window.A8ERomPicker.show();
+        });
+      }
+      const mcTilt = document.getElementById("mcTilt");
+      if (mcTilt) {
+        mcTilt.addEventListener("click", function () {
+          const wantOn = !mcTilt.classList.contains("active");
+          setTiltEnabled(wantOn, function (msg) {
+            mcTilt.textContent = msg;
+            window.setTimeout(function () {
+              mcTilt.textContent = "TILT";
+            }, 2000);
+          }).then(function (isOn) {
+            mcTilt.classList.toggle("active", !!isOn);
+          });
+        });
+      }
+      const mcAutoFire = document.getElementById("mcAutoFire");
+      if (mcAutoFire) {
+        mcAutoFire.addEventListener("click", function () {
+          const next = !mcAutoFire.classList.contains("active");
+          setAutoFireEnabled(next);
+          mcAutoFire.classList.toggle("active", next);
         });
       }
       if (btnJoystick && joystickPanel) setJoystickEnabled(false);

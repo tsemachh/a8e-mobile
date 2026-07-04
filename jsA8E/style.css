@@ -2832,10 +2832,10 @@ body.mobileGame .screenViewport canvas {
 
 .mcDpad {
   position: fixed;
-  left: calc(env(safe-area-inset-left, 0px) + 18px);
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
-  width: 148px;
-  height: 148px;
+  left: calc(env(safe-area-inset-left, 0px) + 14px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
+  width: 104px;
+  height: 104px;
   border-radius: 50%;
   border: 2px solid rgba(255, 255, 255, 0.28);
   background: radial-gradient(circle at 50% 45%, rgba(60, 75, 105, 0.4), rgba(22, 29, 43, 0.45));
@@ -2847,8 +2847,8 @@ body.mobileGame .screenViewport canvas {
 }
 
 .mcDpadNub {
-  width: 62px;
-  height: 62px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   background: rgba(157, 176, 211, 0.5);
   border: 1px solid rgba(255, 255, 255, 0.35);
@@ -2857,10 +2857,10 @@ body.mobileGame .screenViewport canvas {
 
 .mcFire {
   position: fixed;
-  right: calc(env(safe-area-inset-right, 0px) + 22px);
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 40px);
-  width: 108px;
-  height: 108px;
+  right: calc(env(safe-area-inset-right, 0px) + 18px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 26px);
+  width: 92px;
+  height: 92px;
   border-radius: 50%;
   border: 2px solid rgba(255, 120, 100, 0.45);
   background: radial-gradient(circle at 50% 40%, rgba(200, 64, 48, 0.5), rgba(120, 30, 20, 0.45));
@@ -2969,4 +2969,51 @@ body:not(.mobileGame) .mobileControls {
   color: var(--sub-panel-dim);
   font-size: var(--fs-xs);
   text-align: center;
+}
+
+/* ===== Full-screen floating stick + toggles ===== */
+
+.mcTouchLayer {
+  position: fixed;
+  inset: 0;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+/* Disable the steering layer while overlays that need taps are open */
+body.mcShowBar .mcTouchLayer {
+  pointer-events: none;
+}
+
+.mcGhostStick {
+  position: fixed;
+  width: 96px;
+  height: 96px;
+  margin: -48px 0 0 -48px;
+  border-radius: 50%;
+  border: 2px dashed rgba(255, 255, 255, 0.35);
+  background: rgba(22, 29, 43, 0.25);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mcGhostStick[hidden] {
+  display: none;
+}
+
+.mcGhostNub {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(157, 176, 211, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  will-change: transform;
+}
+
+.mcConsoleBtn.mcToggle.active {
+  border-color: #4ade80;
+  color: #4ade80;
+  background: rgba(20, 50, 32, 0.65);
 }
