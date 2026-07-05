@@ -6,10 +6,6 @@
       "description": "Activision, 1983"
     },
     {
-      "name": "Action Biker",
-      "file": "ActionBiker.atr"
-    },
-    {
       "name": "Alley Cat",
       "file": "AlleyCat.atr"
     },
@@ -30,10 +26,6 @@
       "file": "BajaBuggies.atr"
     },
     {
-      "name": "Blue Max",
-      "file": "BlueMax.atr"
-    },
-    {
       "name": "Boulder Dash",
       "file": "BoulderDash.atr",
       "description": "First Star Software, 1984"
@@ -41,10 +33,6 @@
     {
       "name": "Bounty Bob Strikes Back",
       "file": "BountyBobStrikesBack.atr"
-    },
-    {
-      "name": "Bristles",
-      "file": "Bristles.atr"
     },
     {
       "name": "Bruce Lee",
@@ -59,16 +47,8 @@
       "file": "Colony.atr"
     },
     {
-      "name": "Cosmic Tunnels",
-      "file": "CosmicTunnels.atr"
-    },
-    {
       "name": "Defender",
       "file": "Defender.atr"
-    },
-    {
-      "name": "Desmonds Dungeon",
-      "file": "DesmondsDungeon.atr"
     },
     {
       "name": "Donkey Kong",
@@ -81,22 +61,6 @@
     {
       "name": "Dropzone",
       "file": "Dropzone.atr"
-    },
-    {
-      "name": "Escape from Epsilon",
-      "file": "EscapeFromEpsilon.atr"
-    },
-    {
-      "name": "Flip and Flop",
-      "file": "FlipAndFlop.atr"
-    },
-    {
-      "name": "Fort Apocalypse",
-      "file": "FortApocalypse.atr"
-    },
-    {
-      "name": "Frogger",
-      "file": "Frogger.atr"
     },
     {
       "name": "Frogger II",
@@ -121,10 +85,6 @@
     {
       "name": "Ion Roadway",
       "file": "IonRoadway.atr"
-    },
-    {
-      "name": "James Bond",
-      "file": "JamesBond.atr"
     },
     {
       "name": "Jet Boot Jack",
@@ -159,18 +119,6 @@
       "file": "MoonPatrol.atr"
     },
     {
-      "name": "Mr Do",
-      "file": "MrDoCrk.atr"
-    },
-    {
-      "name": "Mr Robot & His Robot Factory",
-      "file": "MrRobotHisRobotFactoryCht.atr"
-    },
-    {
-      "name": "Ms Pacman",
-      "file": "MsPacman.atr"
-    },
-    {
       "name": "Nadral",
       "file": "Nadral.atr"
     },
@@ -195,20 +143,12 @@
       "file": "PharaohSCurse.atr"
     },
     {
-      "name": "Pitfall",
-      "file": "PitfallI.atr"
-    },
-    {
       "name": "Pitfall II",
       "file": "PitfallIi.atr"
     },
     {
       "name": "Pitstop II",
       "file": "PitstopIi.atr"
-    },
-    {
-      "name": "Pole Position",
-      "file": "PolePosition.atr"
     },
     {
       "name": "Pong",
@@ -239,18 +179,6 @@
       "file": "SpyVsSpy1.atr"
     },
     {
-      "name": "Spy Vs Spy 2",
-      "file": "SpyVsSpy2.atr"
-    },
-    {
-      "name": "Spy's Demise",
-      "file": "SpySDemise.atr"
-    },
-    {
-      "name": "Super Cobra",
-      "file": "SuperCobra.atr"
-    },
-    {
       "name": "Super Zaxxon",
       "file": "SuperZaxxon.atr"
     },
@@ -277,10 +205,6 @@
     {
       "name": "Volleyball",
       "file": "Volleyball.atr"
-    },
-    {
-      "name": "Zaxxon",
-      "file": "Zaxxon.atr"
     },
     {
       "name": "Zorro",
