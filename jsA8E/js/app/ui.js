@@ -1363,6 +1363,7 @@
     let manualFireHeld = false;
     let autoFireTimer = 0;
     let autoFirePhase = false;
+    let touchMoveActive = false;
 
     function setAutoFireEnabled(active) {
       const next = !!active;
@@ -1413,6 +1414,8 @@
 
     function onTiltReading(e) {
       if (!tiltEnabled) return;
+      // Touch steering wins while a finger is down: don't fight the pad.
+      if (touchMoveActive) return;
       const axes = tiltAxes(e);
       if (!tiltBase) {
         // First reading after enabling = neutral position.
@@ -1475,6 +1478,14 @@
 
       let movePointerId = null; // single movement pointer (pad or layer)
 
+      function beginMove(pointerId) {
+        // Take over cleanly: if another movement pointer was active, drop it
+        // so its (now unmatched) pointerup can't leave directions stuck.
+        if (movePointerId !== null && movePointerId !== pointerId) resetMove();
+        movePointerId = pointerId;
+        touchMoveActive = true;
+      }
+
       function applyVector(dx, dy, dead, maxDeflect, nubEl) {
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (nubEl) {
@@ -1491,6 +1502,7 @@
 
       function resetMove() {
         movePointerId = null;
+        touchMoveActive = false;
         if (nub) nub.style.transform = "";
         if (ghostNub) ghostNub.style.transform = "";
         if (ghost) ghost.hidden = true;
@@ -1509,7 +1521,7 @@
 
       pad.addEventListener("pointerdown", function (e) {
         e.preventDefault();
-        movePointerId = e.pointerId;
+        beginMove(e.pointerId);
         try {
           pad.setPointerCapture(e.pointerId);
         } catch {
@@ -1535,7 +1547,7 @@
       if (layer) {
         layer.addEventListener("pointerdown", function (e) {
           e.preventDefault();
-          movePointerId = e.pointerId;
+          beginMove(e.pointerId);
           try {
             layer.setPointerCapture(e.pointerId);
           } catch {
@@ -1568,12 +1580,24 @@
         e.preventDefault();
         resetMove();
       };
+      const endMoveUnconditional = function (e) {
+        if (e.pointerId !== movePointerId) return;
+        resetMove();
+      };
       pad.addEventListener("pointerup", endMove);
       pad.addEventListener("pointercancel", endMove);
+      pad.addEventListener("lostpointercapture", endMoveUnconditional);
       if (layer) {
         layer.addEventListener("pointerup", endMove);
         layer.addEventListener("pointercancel", endMove);
+        layer.addEventListener("lostpointercapture", endMoveUnconditional);
       }
+      // Safety net: if the app loses focus mid-drag (notification, app
+      // switch), release everything rather than leaving a direction stuck.
+      window.addEventListener("blur", resetMove);
+      document.addEventListener("visibilitychange", function () {
+        if (document.hidden) resetMove();
+      });
 
       fire.addEventListener("pointerdown", function (e) {
         e.preventDefault();
